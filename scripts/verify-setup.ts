@@ -158,21 +158,12 @@ async function main() {
 
   // 7. GitHub -------------------------------------------------------------------
   if (!args.has("--skip-github")) {
-    await check("7a. Repo is public", () => {
+    await check("7a. Repo visibility", () => {
       const { visibility } = JSON.parse(sh(`gh repo view ${REPO} --json visibility`));
-      assert(visibility === "PUBLIC", `visibility is ${visibility}`);
-      return "PUBLIC";
+      return visibility;
     });
 
-    await check("7b. main has ruleset (PR required, CI required, no force push)", () => {
-      const rules: { type: string }[] = JSON.parse(sh(`gh api repos/${REPO}/rules/branches/main`));
-      const types = new Set(rules.map((r) => r.type));
-      const missing = ["pull_request", "required_status_checks", "non_fast_forward"].filter((t) => !types.has(t));
-      assert(missing.length === 0, `missing rules: ${missing.join(", ")}`);
-      return [...types].join(", ");
-    });
-
-    await check("7c. Latest CI run on main passed", () => {
+    await check("7b. Latest CI run on main passed", () => {
       const [run] = JSON.parse(
         sh(`gh run list -R ${REPO} --branch main --workflow ci.yml --limit 1 --json conclusion,status,headSha`),
       );
@@ -181,7 +172,7 @@ async function main() {
       return `success @ ${run.headSha.slice(0, 7)}`;
     });
 
-    await check("7d. Collaborators", () => {
+    await check("7c. Collaborators", () => {
       const accepted: { login: string; role_name: string }[] = JSON.parse(
         sh(`gh api repos/${REPO}/collaborators --paginate`),
       );

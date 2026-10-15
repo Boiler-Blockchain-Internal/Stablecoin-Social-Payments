@@ -35,7 +35,7 @@ Never commit `.env.local`.
 
 1. Branch from `main` as `yourname/feature` (e.g. `alex/send-form`).
 2. Open a PR to `main`.
-3. Merge once CI (lint, typecheck, build) passes. Direct pushes to `main` are blocked.
+3. Merge once CI (lint, typecheck, build) passes. Don't push directly to `main`.
 
 ## Checking your setup
 
