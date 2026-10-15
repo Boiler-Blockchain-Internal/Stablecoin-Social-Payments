@@ -13,6 +13,7 @@
     "@privy-io/react-auth": "^3.49.1",
     "@supabase/supabase-js": "^2.118.0",
     "next": "16.4.1",
+    "ox": "^0.8.9",
     "permissionless": "^0.2.57",
     "react": "19.3.0",
     "react-dom": "19.3.0",
