@@ -176,11 +176,16 @@ async function main() {
       const accepted: { login: string; role_name: string }[] = JSON.parse(
         sh(`gh api repos/${REPO}/collaborators --paginate`),
       );
-      const pending: { invitee: { login: string } | null; email?: string }[] = JSON.parse(
-        sh(`gh api repos/${REPO}/invitations --paginate`),
-      );
       const a = accepted.map((c) => `${c.login} (${c.role_name})`).join(", ") || "none";
-      const p = pending.map((i) => i.invitee?.login ?? i.email ?? "?").join(", ") || "none";
+      let p: string;
+      try {
+        const pending: { invitee: { login: string } | null; email?: string }[] = JSON.parse(
+          sh(`gh api repos/${REPO}/invitations --paginate`),
+        );
+        p = pending.map((i) => i.invitee?.login ?? i.email ?? "?").join(", ") || "none";
+      } catch {
+        p = "can't list (needs repo admin)";
+      }
       return `accepted: ${a} | pending: ${p}`;
     });
   }
