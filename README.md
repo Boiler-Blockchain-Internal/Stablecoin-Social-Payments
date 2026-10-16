@@ -6,15 +6,21 @@ A Venmo-style app for sending and requesting USDC with friends. Users log in wit
 
 ## Run locally
 
+Clone the repo directly. **Don't fork it**: PRs from forks don't get a Vercel preview, and you already have push access.
+
 ```bash
 git clone https://github.com/Boiler-Blockchain-Internal/Stablecoin-Social-Payments.git
 cd Stablecoin-Social-Payments
 npm install
-cp .env.example .env.local   # then get the real values from the lead
+# Save the env file the lead sent you (stablecoin-team.env) as .env.local in the repo root:
+cp ~/Downloads/stablecoin-team.env .env.local
 npm run dev                  # http://localhost:3000
 ```
 
-Never commit `.env.local`.
+Log in with email at http://localhost:3000 and you should see your smart wallet address and a USDC balance.
+
+- Never commit `.env.local` (it's gitignored). `.env.example` lists the keys with no values.
+- If `npm install` changes `package-lock.json` and you didn't add a package, don't commit it: run `git checkout package-lock.json`. A churned lockfile makes CI's `npm ci` fail.
 
 ## Where things go
 
@@ -34,8 +40,12 @@ Never commit `.env.local`.
 ## Branches and PRs
 
 1. Branch from `main` as `yourname/feature` (e.g. `alex/send-form`).
-2. Open a PR to `main`.
+2. Push it and open a PR to `main`.
 3. Merge once CI (lint, typecheck, build) passes. Don't push directly to `main`.
+
+Every PR also gets a **Vercel preview** deployment, and a bot comments its URL on the PR. Previews are behind Vercel login.
+**Privy login only works on `http://localhost:3000` and production** (https://stablecoin-social-payments.vercel.app), not on preview URLs, so test anything that needs login locally.
+Merging to `main` deploys to production automatically.
 
 ## Checking your setup
 
