@@ -8,7 +8,7 @@ A Venmo-style app for sending and requesting USDC with friends. Users log in wit
 
 Clone the repo directly. **Don't fork it**: you already have push access, and PRs from forks don't get repo secrets.
 
-You need Node 20.17+ (Node 24 recommended) and **npm 11.12+**, the version CI uses. Older npm fails `npm ci` with a `Missing: ... from lock file` error. If you hit that error, upgrade npm and re-run.
+You need Node 20.17+ (Node 24 recommended) and **npm 11.12+**, the version CI uses. Older npm refuses to install (`EBADENGINE ... Required: {"npm":">=11.12.0"}`); upgrade npm and re-run. Don't regenerate `package-lock.json` to work around an install error.
 
 ```bash
 npm install -g npm@11        # once; then check `npm --version` is 11.12 or higher
