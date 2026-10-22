@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import type { Address } from "viem";
 
@@ -12,46 +12,55 @@ export type AppUser = {
   created_at: string;
 };
 
-/**
- * After login, once the smart wallet exists, upserts the user's row in Supabase
- * via POST /api/users/sync and returns it.
- */
+/** Mounted per Privy identity by ProfileGate; stale requests are cancelled. */
 export function useSyncUser(smartWalletAddress: Address | undefined) {
-  const { authenticated, getAccessToken } = usePrivy();
+  const { getAccessToken } = usePrivy();
   const [user, setUser] = useState<AppUser | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [nonce, setNonce] = useState(0);
+  const retry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    setNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
-    if (!authenticated || !smartWalletAddress) return;
-    let cancelled = false;
-
+    const controller = new AbortController();
     (async () => {
-      // Privy links the smart wallet to the user server-side shortly after it is created,
-      // so retry a few times until the server sees it.
-      for (let attempt = 0; attempt < 5 && !cancelled; attempt++) {
+      // Persist immediately; retry while Privy links a newly created wallet.
+      for (let attempt = 0; attempt < 5; attempt++) {
         try {
           const token = await getAccessToken();
+          if (!token) throw new Error("Session expired. Please log in again.");
           const res = await fetch("/api/users/sync", {
             method: "POST",
             headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
           });
           const body = await res.json();
-          if (!res.ok) throw new Error(body.error ?? res.statusText);
-          if (cancelled) return;
-          setUser(body.user);
+          if (!res.ok) throw new Error(body.error ?? "Profile sync failed.");
+          if (controller.signal.aborted) return;
+          // An in-flight wallet sync must not undo a username just saved by onboarding.
+          setUser((previous) => ({ ...body.user, username: previous?.username ?? body.user.username }));
           setError(null);
-          if (body.user.wallet_address) return;
+          setLoading(false);
+          if (!smartWalletAddress || body.user.wallet_address) return;
+          if (attempt === 4) throw new Error("Wallet is still being linked. Retry profile sync shortly.");
         } catch (e) {
-          if (!cancelled) setError(e instanceof Error ? e.message : "Sync failed");
+          if (controller.signal.aborted) return;
+          if (attempt === 4) {
+            setError(e instanceof Error ? e.message : "Profile sync failed.");
+            setLoading(false);
+            return;
+          }
         }
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (controller.signal.aborted) return;
       }
     })();
+    return () => controller.abort();
+  }, [smartWalletAddress, getAccessToken, nonce]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [authenticated, smartWalletAddress, getAccessToken]);
-
-  return { user, error };
+  return { user, error, loading, retry, setUser };
 }
