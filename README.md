@@ -6,7 +6,7 @@ A Venmo-style app for sending and requesting USDC with friends. Users log in wit
 
 ## Run locally
 
-Clone the repo directly. **Don't fork it**: PRs from forks don't get a Vercel preview, and you already have push access.
+Clone the repo directly. **Don't fork it**: you already have push access, and PRs from forks don't get repo secrets.
 
 You need Node 20.17+ (Node 24 recommended) and **npm 11.12+**, the version CI uses. Older npm fails `npm ci` with a `Missing: ... from lock file` error. If you hit that error, upgrade npm and re-run.
 
@@ -46,9 +46,10 @@ Log in with email at http://localhost:3000 and you should see your smart wallet 
 2. Push it and open a PR to `main`.
 3. Merge once CI (lint, typecheck, build) passes. Don't push directly to `main`.
 
-Every PR also gets a **Vercel preview** deployment, and a bot comments its URL on the PR. Previews are behind Vercel login.
+PRs opened by crh78 also get a **Vercel preview** deployment, and a bot comments its URL on the PR. Previews are behind Vercel login.
+Other people's PRs skip the preview: the Vercel team is on the Hobby plan, which blocks deploys of commits by non-members. CI still runs on every PR.
 **Privy login only works on `http://localhost:3000` and production** (https://stablecoin-social-payments.vercel.app), not on preview URLs, so test anything that needs login locally.
-Merging to `main` deploys to production automatically.
+Merging to `main` deploys to production automatically. For the same Hobby reason, only crh78 should merge, using **Create a merge commit** (not squash or rebase).
 
 ## Checking your setup
 
