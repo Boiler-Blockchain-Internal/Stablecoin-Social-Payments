@@ -13,32 +13,19 @@ import { getSupabaseAdmin } from "@/lib/supabase-server";
  * Pattern for every write route: requirePrivyUser() → service-role Supabase write.
  */
 export async function POST(request: Request) {
-  let privyId: string;
   try {
-    privyId = await requirePrivyUser(request);
+    const privyId = await requirePrivyUser(request);
+    const walletAddress = await getSmartWalletAddress(privyId);
+    const { data, error } = await getSupabaseAdmin().from("users").upsert(
+      { privy_id: privyId, ...(walletAddress ? { wallet_address: walletAddress.toLowerCase() } : {}) },
+      { onConflict: "privy_id" },
+    ).select("id, privy_id, username, wallet_address, created_at").single();
+    if (error) throw error;
+    return Response.json({ user: data });
   } catch (e) {
     if (e instanceof UnauthorizedError) {
       return Response.json({ error: e.message }, { status: 401 });
     }
-    throw e;
+    return Response.json({ error: "Unable to sync profile. Please try again." }, { status: 500 });
   }
-
-  const walletAddress = await getSmartWalletAddress(privyId);
-
-  const { data, error } = await getSupabaseAdmin()
-    .from("users")
-    .upsert(
-      {
-        privy_id: privyId,
-        ...(walletAddress ? { wallet_address: walletAddress.toLowerCase() } : {}),
-      },
-      { onConflict: "privy_id" },
-    )
-    .select()
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
-  }
-  return Response.json({ user: data });
 }

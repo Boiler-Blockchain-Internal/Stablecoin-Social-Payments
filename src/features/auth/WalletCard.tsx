@@ -2,14 +2,12 @@
 
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWalletAddress } from "./useSmartWalletAddress";
-import { useSyncUser } from "./useSyncUser";
 import { useUsdcBalance } from "./useUsdcBalance";
 
 export function WalletCard() {
   const { ready, authenticated } = usePrivy();
   const address = useSmartWalletAddress();
   const { balance, error: balanceError, refresh } = useUsdcBalance(address);
-  const { user, error: syncError } = useSyncUser(address);
 
   if (!ready) return null;
 
@@ -44,15 +42,6 @@ export function WalletCard() {
           Refresh
         </button>
       </div>
-      <p className="text-xs text-zinc-500">
-        {syncError
-          ? `Profile sync error: ${syncError}`
-          : user
-            ? `Profile saved (id ${user.id.slice(0, 8)}…)`
-            : address
-              ? "Saving profile…"
-              : null}
-      </p>
     </section>
   );
 }
