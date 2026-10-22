@@ -58,3 +58,4 @@ Merging to `main` deploys to production automatically. For the same Hobby reason
 ## Contributors
 
 - Rithvik Reddy Siddenki - Auth & Profiles
+- Eshwar Bejugam - Send
