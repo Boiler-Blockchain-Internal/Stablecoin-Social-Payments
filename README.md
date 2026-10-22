@@ -53,3 +53,7 @@ Merging to `main` deploys to production automatically.
 ## Checking your setup
 
 `npx tsx scripts/verify-setup.ts` checks env vars, Supabase, Privy, the chain, and the build. The database checks need Supabase CLI access, so they only pass for the lead.
+
+## Contributors
+
+- Rithvik Reddy Siddenki - Auth & Profiles
