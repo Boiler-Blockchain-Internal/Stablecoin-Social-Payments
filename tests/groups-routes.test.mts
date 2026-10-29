@@ -6,6 +6,10 @@ type Row = Record<string, unknown>;
 let tables: Record<string, Row[]> = {};
 let failInsertInto: string | null = null;
 let nextId = 0;
+const A = "10000000-0000-4000-8000-00000000000a";
+const B = "10000000-0000-4000-8000-00000000000b";
+const C = "10000000-0000-4000-8000-00000000000c";
+const N = "10000000-0000-4000-8000-00000000000d";
 
 // Controlled SDK boundary: the real route handlers run against a small in-memory store.
 mock.module("../src/lib/privy.ts", { namedExports: {
@@ -25,9 +29,12 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
     function execute(): { data: Row[] | null; error: { message: string; code?: string } | null } {
       if (operation === "insert") {
         if (failInsertInto === table) return { data: null, error: { message: "private database detail" } };
-        const items = (Array.isArray(payload) ? payload : [payload]).map((row) => (
+        const items = (Array.isArray(payload) ? payload : [payload]).map((row): Row => (
           table === "groups" ? { id: `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`, created_at: "now", ...row } : { ...row }
         ));
+        const duplicate = table === "group_members" && items.some((item) => tables.group_members.some(
+          (row) => row.group_id === item.group_id && row.user_id === item.user_id));
+        if (duplicate) return { data: null, error: { message: "duplicate key", code: "23505" } };
         tables[table].push(...items);
         return { data: items, error: null };
       }
@@ -63,23 +70,38 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
 } });
 
 const { POST: createGroup } = await import("../src/app/api/groups/route");
+const { POST: addMember } = await import("../src/app/api/groups/[id]/members/route");
+const { DELETE: removeMember } = await import("../src/app/api/groups/[id]/members/[userId]/route");
 
-function request(body: unknown, account = "account-a") {
+function request(body: unknown, account = "account-a", method = "POST") {
   return new Request("http://localhost/api/groups", {
-    method: "POST",
+    method,
     headers: { Authorization: `Bearer ${account}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: method === "DELETE" ? undefined : JSON.stringify(body),
   });
 }
+
+/** Alice creates a group with Bob; returns its id. */
+async function aliceAndBob() {
+  const { group } = await (await createGroup(request({ name: "Trip", members: ["bob"] }))).json();
+  return group.id as string;
+}
+function add(groupId: string, username: unknown, account = "account-a") {
+  return addMember(request({ username }, account), { params: Promise.resolve({ id: groupId }) });
+}
+function remove(groupId: string, userId: string, account = "account-a") {
+  return removeMember(request(null, account, "DELETE"), { params: Promise.resolve({ id: groupId, userId }) });
+}
+const memberIds = () => tables.group_members.map((row) => row.user_id);
 
 beforeEach(() => {
   failInsertInto = null;
   tables = {
     users: [
-      { id: "u-a", privy_id: "account-a", username: "alice" },
-      { id: "u-b", privy_id: "account-b", username: "bob" },
-      { id: "u-c", privy_id: "account-c", username: "carol" },
-      { id: "u-n", privy_id: "account-new", username: null },
+      { id: A, privy_id: "account-a", username: "alice" },
+      { id: B, privy_id: "account-b", username: "bob" },
+      { id: C, privy_id: "account-c", username: "carol" },
+      { id: N, privy_id: "account-new", username: null },
     ],
     groups: [],
     group_members: [],
@@ -87,19 +109,19 @@ beforeEach(() => {
 });
 
 test("creates a group with the caller and listed members", async () => {
-  const response = await createGroup(request({ name: "  Roommates ", members: ["Bob", "carol"], created_by: "u-b" }));
+  const response = await createGroup(request({ name: "  Roommates ", members: ["Bob", "carol"], created_by: B }));
   assert.equal(response.status, 201);
   const { group } = await response.json();
   assert.equal(group.name, "Roommates");
   assert.equal(tables.groups.length, 1);
-  assert.equal(tables.groups[0].created_by, "u-a");
-  assert.deepEqual(tables.group_members.map((row) => row.user_id), ["u-a", "u-b", "u-c"]);
+  assert.equal(tables.groups[0].created_by, A);
+  assert.deepEqual(tables.group_members.map((row) => row.user_id), [A, B, C]);
   assert.ok(tables.group_members.every((row) => row.group_id === group.id));
 });
 
 test("a group can start with only the caller", async () => {
   assert.equal((await createGroup(request({ name: "Just me" }))).status, 201);
-  assert.deepEqual(tables.group_members.map((row) => row.user_id), ["u-a"]);
+  assert.deepEqual(tables.group_members.map((row) => row.user_id), [A]);
 });
 
 test("invalid names and member lists are rejected without writing", async () => {
@@ -139,4 +161,50 @@ test("a failed member insert removes the group and hides database details", asyn
   assert.equal(response.status, 500);
   assert.doesNotMatch(await response.text(), /private/);
   assert.equal(tables.groups.length, 0);
+});
+
+test("members can add existing users by username", async () => {
+  const id = await aliceAndBob();
+  const response = await add(id, "  Carol ", "account-b");
+  assert.equal(response.status, 201);
+  assert.deepEqual((await response.json()).member, { user_id: C, username: "carol" });
+  assert.deepEqual(memberIds(), [A, B, C]);
+});
+
+test("adding rejects bad ids, outsiders, unknown users and duplicates", async () => {
+  const id = await aliceAndBob();
+  assert.equal((await add("not-a-uuid", "carol")).status, 400);
+  assert.equal((await add("00000000-0000-4000-8000-999999999999", "carol")).status, 404);
+  assert.equal((await add(id, "carol", "account-c")).status, 403);
+  assert.equal((await add(id, "a b")).status, 400);
+  assert.equal((await add(id, "nobody")).status, 404);
+  assert.equal((await add(id, "bob")).status, 409);
+  assert.equal((await add(id, "carol", "invalid")).status, 401);
+  assert.deepEqual(memberIds(), [A, B]);
+});
+
+test("the creator can remove other members", async () => {
+  const id = await aliceAndBob();
+  assert.equal((await remove(id, B)).status, 200);
+  assert.deepEqual(memberIds(), [A]);
+  assert.equal((await remove(id, B)).status, 404);
+});
+
+test("members can leave but can't remove others or the creator", async () => {
+  const id = await aliceAndBob();
+  await add(id, "carol");
+  assert.equal((await remove(id, C, "account-b")).status, 403);
+  assert.equal((await remove(id, A, "account-b")).status, 403);
+  assert.equal((await remove(id, A)).status, 403);
+  assert.equal((await remove(id, B, "account-b")).status, 200);
+  assert.deepEqual(memberIds(), [A, C]);
+});
+
+test("removing rejects bad ids and outsiders", async () => {
+  const id = await aliceAndBob();
+  assert.equal((await remove("not-a-uuid", B)).status, 400);
+  assert.equal((await remove(id, "not-a-uuid")).status, 400);
+  assert.equal((await remove(id, B, "account-c")).status, 403);
+  assert.equal((await remove(id, B, "invalid")).status, 401);
+  assert.deepEqual(memberIds(), [A, B]);
 });

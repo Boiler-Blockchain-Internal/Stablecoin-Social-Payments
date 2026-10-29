@@ -2,7 +2,7 @@
 import { UnauthorizedError } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
 import { isValidUsername, normalizeUsername } from "@/lib/username";
-import { GROUP_NAME_MAX } from "./validation";
+import { GROUP_NAME_MAX, isUuid } from "./validation";
 
 /** An expected failure with a message that is safe to show the user. */
 export class GroupError extends Error {
@@ -36,6 +36,24 @@ export async function getCallerUser(privyId: string): Promise<CallerUser> {
   if (error) throw error;
   if (!data?.username) throw new GroupError("Finish setting up your profile first.", 409);
   return data;
+}
+
+export type GroupRow = { id: string; name: string; created_by: string | null };
+
+export async function getGroup(id: string): Promise<GroupRow> {
+  if (!isUuid(id)) throw new GroupError("That group link isn't valid.", 400);
+  const { data, error } = await getSupabaseAdmin()
+    .from("groups").select("id, name, created_by").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new GroupError("Group not found.", 404);
+  return data;
+}
+
+export async function isMember(groupId: string, userId: string): Promise<boolean> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("group_members").select("user_id").eq("group_id", groupId).eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data !== null;
 }
 
 export function parseGroupName(value: unknown): string {
