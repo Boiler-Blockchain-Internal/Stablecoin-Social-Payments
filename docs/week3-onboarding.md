@@ -4,7 +4,7 @@ Week 1 already provided verified user sync, username validation, uniqueness, and
 
 Successful username submission updates the same profile session and replaces a deep link with `/` once; returning users keep their requested route. There is no redirect effect or redirect loop. The home page reuses the provider's profile session rather than performing a duplicate sync. Existing username rules and all database policies/migrations remain unchanged. Sync requests time out after 15 seconds and retry temporary failures; expired sessions show an immediate re-login error. Privy's own email/Google authentication UI remains unchanged.
 
-Week 2 PRs #9 and #10 are still unmerged. These changes branch from main and do not merge either PR. Compatibility with those branches is verified separately on a temporary local integration branch. Balance/faucet work will extend the existing home WalletCard, so it does not require the unmerged profile route.
+This task started while Week 2 PRs #9 and #10 were unmerged. The team subsequently merged those PRs and Groups into main; this branch was updated from main without merging any Week 3 PR. Compatibility is tested on a temporary local integration branch. No UserPicker, Groups, shared navigation, or schema behavior is changed here.
 
 Verification: run lint, TypeScript, npm test, and build with Node 24/npm 11.12+. After building run `npx --yes --package=playwright --package=node@24 -c "node scripts/test-onboarding-week3.mjs"` (install Playwright Chromium first). Browser tests run real gate/hook/form code with mocked Privy/API: they do not prove live login, deployed uniqueness, or faucet activity. Existing server-route tests cover verified identity, duplicate records, username conflicts, and unauthorized updates.
 
