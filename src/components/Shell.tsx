@@ -2,6 +2,7 @@
 
 import { AuthButton } from "@/features/auth/AuthButton";
 import { BottomNav } from "@/components/BottomNav";
+import { Suspense } from "react";
 
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -11,7 +12,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <AuthButton />
       </header>
       <main className="mx-auto w-full max-w-xl flex-1 px-4 py-6">{children}</main>
-      <BottomNav />
+      <Suspense fallback={null}>
+  <BottomNav />
+</Suspense>
     </div>
   );
 }
