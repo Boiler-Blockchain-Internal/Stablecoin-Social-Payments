@@ -5,6 +5,7 @@ import { UnauthorizedError } from "../src/lib/privy";
 type Row = Record<string, unknown>;
 let tables: Record<string, Row[]> = {};
 let failInsertInto: string | null = null;
+let failUpdateInto: string | null = null;
 let nextId = 0;
 const A = "10000000-0000-4000-8000-00000000000a";
 const B = "10000000-0000-4000-8000-00000000000b";
@@ -40,6 +41,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
         return { data: [row], error: null };
       }
       const matching = tables[table].filter((row) => filters.every((filter) => filter(row)));
+      if (operation === "update" && failUpdateInto === table) return { data: null, error: { message: "private database detail" } };
       if (operation === "update") matching.forEach((row) => Object.assign(row, payload));
       return { data: matching.map((row) => ({ ...row })), error: null };
     }
@@ -49,6 +51,10 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
       insert: (input: Row) => { operation = "insert"; payload = input; return query; },
       update: (input: Row) => { operation = "update"; payload = input; return query; },
       eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return query; },
+      not: (key: string, operator: string, value: unknown) => {
+        if (operator === "is" && value === null) filters.push((row) => row[key] != null);
+        return query;
+      },
       is: (key: string, value: unknown) => { filters.push((row) => (row[key] ?? null) === value); return query; },
       in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return query; },
       single: async () => {
@@ -86,6 +92,7 @@ async function aliceAsksBob() {
 
 beforeEach(() => {
   failInsertInto = null;
+  failUpdateInto = null;
   tables = {
     users: [
       { id: A, privy_id: "account-a", username: "alice" },
@@ -143,28 +150,39 @@ test("lists incoming and outgoing requests with usernames", async () => {
 
 test("paying marks the request paid and records a linked transaction", async () => {
   const id = await aliceAsksBob();
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
   const response = await answer(id, { action: "pay", txHash: HASH });
   assert.equal(response.status, 200);
   assert.equal(tables.requests[0].status, "paid");
   assert.equal(tables.transactions.length, 1);
   const { from_user, to_user, amount, tx_hash, request_id, status } = tables.transactions[0];
-  assert.deepEqual({ from_user, to_user, amount, tx_hash, request_id, status }, { from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: id, status: "pending" });
+  assert.deepEqual({ from_user, to_user, amount, tx_hash, request_id, status }, { from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: id, status: "confirmed" });
 });
 
-test("paying links a transaction the send already recorded", async () => {
+test("paying links a verified transaction the send already recorded", async () => {
   const id = await aliceAsksBob();
-  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "pending" });
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
   assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 200);
   assert.equal(tables.transactions.length, 1);
   assert.equal(tables.transactions[0].request_id, id);
 });
 
+test("an arbitrary or unverified hash cannot settle a request", async () => {
+  const id = await aliceAsksBob();
+  assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
+  assert.equal(tables.requests[0].status, "pending");
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "pending" });
+  assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
+  assert.equal(tables.requests[0].status, "pending");
+});
+
 test("a mismatched transaction is refused and the request stays pending", async () => {
   const id = await aliceAsksBob();
   for (const tx of [
-    { from_user: C, to_user: A, amount: 5, request_id: null, status: "pending" },
+    { from_user: C, to_user: A, amount: 5, request_id: null, status: "confirmed" },
     { from_user: B, to_user: A, amount: 0.01, request_id: null, status: "pending" },
     { from_user: B, to_user: A, amount: 5, request_id: null, status: "failed" },
+    { from_user: B, to_user: A, amount: 5, request_id: null, status: "pending" },
     { from_user: B, to_user: A, amount: 5, request_id: "another-request", status: "confirmed" },
   ]) {
     tables.transactions = [{ id: "tx-1", tx_hash: HASH, ...tx }];
@@ -181,9 +199,10 @@ test("requests can join a split only from inside its group", async () => {
   assert.equal(tables.requests.length, 1);
 });
 
-test("a failed transaction write rolls the request back to pending", async () => {
+test("a failed request-to-transaction link rolls the request back to pending", async () => {
   const id = await aliceAsksBob();
-  failInsertInto = "transactions";
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
+  failUpdateInto = "transactions";
   const response = await answer(id, { action: "pay", txHash: HASH });
   assert.equal(response.status, 500);
   assert.doesNotMatch(await response.text(), /private database detail/);
@@ -209,5 +228,16 @@ test("bad answers are rejected", async () => {
   assert.equal((await answer("10000000-0000-4000-8000-0000000000ff", { action: "decline" })).status, 404);
   const malformed = new Request("http://localhost", { method: "POST", headers: { Authorization: "Bearer account-b" }, body: "{" });
   assert.equal((await answerRequest(malformed, { params: Promise.resolve({ id }) })).status, 400);
+  assert.equal(tables.requests[0].status, "pending");
+});
+
+test("a request with a pending Send intent cannot be declined", async () => {
+  const id = await aliceAsksBob();
+  tables.transactions.push({
+    id: "tx-pending", from_user: B, to_user: A, amount: "5", tx_hash: null,
+    request_id: id, client_reference: "30000000-0000-4000-8000-000000000001", status: "pending",
+  });
+  const response = await answer(id, { action: "decline" });
+  assert.equal(response.status, 409);
   assert.equal(tables.requests[0].status, "pending");
 });
