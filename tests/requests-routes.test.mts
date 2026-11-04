@@ -12,6 +12,7 @@ const C = "10000000-0000-4000-8000-00000000000c";
 const N = "10000000-0000-4000-8000-00000000000d";
 const HASH = `0x${"ab".repeat(32)}`;
 const OTHER_HASH = `0x${"cd".repeat(32)}`;
+const SPLIT = "20000000-0000-4000-8000-000000000001";
 
 // Controlled SDK boundary: the real route handlers run against a small in-memory store.
 mock.module("../src/lib/privy.ts", { namedExports: {
@@ -48,6 +49,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
       insert: (input: Row) => { operation = "insert"; payload = input; return query; },
       update: (input: Row) => { operation = "update"; payload = input; return query; },
       eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return query; },
+      is: (key: string, value: unknown) => { filters.push((row) => (row[key] ?? null) === value); return query; },
       in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return query; },
       single: async () => {
         const result = execute();
@@ -93,6 +95,8 @@ beforeEach(() => {
     ],
     requests: [],
     transactions: [],
+    splits: [{ id: SPLIT, group_id: "group-1" }],
+    group_members: [{ group_id: "group-1", user_id: A }, { group_id: "group-1", user_id: B }],
   };
 });
 
@@ -157,9 +161,24 @@ test("paying links a transaction the send already recorded", async () => {
 
 test("a mismatched transaction is refused and the request stays pending", async () => {
   const id = await aliceAsksBob();
-  tables.transactions.push({ id: "tx-1", from_user: C, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "pending" });
-  assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
-  assert.equal(tables.requests[0].status, "pending");
+  for (const tx of [
+    { from_user: C, to_user: A, amount: 5, request_id: null, status: "pending" },
+    { from_user: B, to_user: A, amount: 0.01, request_id: null, status: "pending" },
+    { from_user: B, to_user: A, amount: 5, request_id: null, status: "failed" },
+    { from_user: B, to_user: A, amount: 5, request_id: "another-request", status: "confirmed" },
+  ]) {
+    tables.transactions = [{ id: "tx-1", tx_hash: HASH, ...tx }];
+    assert.equal((await answer(id, { action: "pay", txHash: HASH.toUpperCase().replace("0X", "0x") })).status, 409, JSON.stringify(tx));
+    assert.equal(tables.requests[0].status, "pending");
+  }
+});
+
+test("requests can join a split only from inside its group", async () => {
+  assert.equal((await createRequest(request({ toUsername: "bob", amount: "3", splitId: SPLIT }))).status, 200);
+  assert.equal(tables.requests[0].split_id, SPLIT);
+  assert.equal((await createRequest(request({ toUsername: "bob", amount: "3", splitId: SPLIT }, "account-c"))).status, 403);
+  assert.equal((await createRequest(request({ toUsername: "bob", amount: "3", splitId: "20000000-0000-4000-8000-0000000000ff" }))).status, 404);
+  assert.equal(tables.requests.length, 1);
 });
 
 test("a failed transaction write rolls the request back to pending", async () => {

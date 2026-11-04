@@ -19,8 +19,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const body = await readJsonObject(request);
     const action = body.action;
     if (action !== "pay" && action !== "decline") throw new RequestError("Invalid action.", 400);
-    const txHash = action === "pay" ? body.txHash : null;
-    if (action === "pay" && !isTxHash(txHash)) throw new RequestError("Paying needs the transfer's transaction hash.", 400);
+    if (action === "pay" && !isTxHash(body.txHash)) throw new RequestError("Paying needs the transfer's transaction hash.", 400);
+    const txHash = action === "pay" ? (body.txHash as string).toLowerCase() : null;
 
     const db = getSupabaseAdmin();
     const found = await db.from("requests").select("id, requester_id, payer_id, amount, note, status").eq("id", id).maybeSingle();
@@ -40,7 +40,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       try {
         await linkPayment(row, txHash as string);
       } catch (e) {
-        await db.from("requests").update({ status: "pending" }).eq("id", id);
+        const rollback = await db.from("requests").update({ status: "pending" }).eq("id", id);
+        if (rollback.error) console.error(`Request ${id} is paid with no linked transaction:`, rollback.error);
         throw e;
       }
     }
@@ -50,17 +51,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 }
 
-async function linkPayment(row: RequestRow, txHash: string) {
+async function linkPayment(row: RequestRow, txHash: string, retried = false): Promise<void> {
   const db = getSupabaseAdmin();
-  const existing = await db.from("transactions").select("id, from_user, to_user, request_id").eq("tx_hash", txHash).maybeSingle();
+  const existing = await db.from("transactions").select("id, from_user, to_user, amount, status, request_id").eq("tx_hash", txHash).maybeSingle();
   if (existing.error) throw existing.error;
   if (existing.data) {
     const tx = existing.data;
-    if (tx.from_user !== row.payer_id || tx.to_user !== row.requester_id || tx.request_id) {
+    if (tx.from_user !== row.payer_id || tx.to_user !== row.requester_id || Number(tx.amount) !== Number(row.amount)
+      || tx.status === "failed" || tx.request_id) {
       throw new RequestError("That transaction doesn't match this request.", 409);
     }
-    const { error } = await db.from("transactions").update({ request_id: row.id }).eq("id", tx.id);
-    if (error) throw error;
+    // Only an unlinked row, so one transfer can't settle two requests.
+    const linked = await db.from("transactions").update({ request_id: row.id })
+      .eq("id", tx.id).is("request_id", null).select("id").maybeSingle();
+    if (linked.error) throw linked.error;
+    if (!linked.data) throw new RequestError("That transaction already settled another request.", 409);
     return;
   }
   const { error } = await db.from("transactions").insert({
@@ -72,5 +77,7 @@ async function linkPayment(row: RequestRow, txHash: string) {
     status: "pending",
     request_id: row.id,
   });
+  // The send recorded the same hash meanwhile: link that row instead.
+  if (error?.code === "23505" && !retried) return linkPayment(row, txHash, true);
   if (error) throw error;
 }

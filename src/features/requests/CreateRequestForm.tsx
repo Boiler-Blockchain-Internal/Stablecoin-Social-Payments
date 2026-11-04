@@ -4,7 +4,7 @@ import { useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { UserPicker } from "@/features/auth/UserPicker";
 import { createRequest } from "./createRequest";
-import { NOTE_MAX } from "./validation";
+import { AMOUNT_MAX, NOTE_MAX } from "./validation";
 
 export function CreateRequestForm({ onCreated }: { onCreated?: () => void }) {
   const { getAccessToken } = usePrivy();
@@ -40,7 +40,7 @@ export function CreateRequestForm({ onCreated }: { onCreated?: () => void }) {
       <UserPicker value={toUsername} onChange={setToUsername} label="From" placeholder="Search by username" />
       <div>
         <label htmlFor="request-amount" className="block text-sm font-medium">Amount (USDC)</label>
-        <input id="request-amount" type="number" inputMode="decimal" min="0.01" step="0.01" required value={amount}
+        <input id="request-amount" type="number" inputMode="decimal" min="0.000001" max={AMOUNT_MAX} step="any" required value={amount}
           onChange={(e) => setAmount(e.target.value)} className="w-full rounded-lg border border-zinc-300 px-3 py-2" />
       </div>
       <div>

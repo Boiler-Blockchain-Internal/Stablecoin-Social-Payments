@@ -25,6 +25,16 @@ export async function POST(request: Request) {
     if (splitId !== null && (typeof splitId !== "string" || !isUuid(splitId))) throw new RequestError("That split isn't valid.", 400);
 
     const db = getSupabaseAdmin();
+    if (splitId) {
+      // Only members of the split's group can attach requests to it.
+      const split = await db.from("splits").select("group_id").eq("id", splitId).maybeSingle();
+      if (split.error) throw split.error;
+      if (!split.data) throw new RequestError("Split not found.", 404);
+      const member = await db.from("group_members").select("user_id")
+        .eq("group_id", split.data.group_id).eq("user_id", caller.id).maybeSingle();
+      if (member.error) throw member.error;
+      if (!member.data) throw new RequestError("You're not in that split's group.", 403);
+    }
     // Exact match after validation, so underscores can't act as wildcards.
     const payerRes = await db.from("users").select("id").eq("username", toUsername).maybeSingle();
     if (payerRes.error) throw payerRes.error;
@@ -69,6 +79,8 @@ export async function GET(request: Request) {
     return Response.json({
       requests: (requests ?? []).map((r) => ({
         ...r,
+        // numeric arrives as a JSON number; USDC helpers expect a decimal string.
+        amount: String(r.amount),
         requester_username: usernames[r.requester_id] ?? null,
         payer_username: usernames[r.payer_id] ?? null,
       })),

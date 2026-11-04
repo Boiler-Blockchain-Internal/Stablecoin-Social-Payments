@@ -13,8 +13,11 @@ export function RequestsInbox({ userId }: { userId: string }) {
   const { getAccessToken } = usePrivy();
   const [tab, setTab] = useState<Tab>("incoming");
   const [loaded, setLoaded] = useState<{ tab: Tab; requests: RequestWithUsers[] } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Transfers that went through but weren't recorded yet; retrying reuses the hash instead of paying twice.
+  const [sentHashes, setSentHashes] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
   const reload = useCallback(() => setRefresh((n) => n + 1), []);
 
@@ -27,9 +30,9 @@ export function RequestsInbox({ userId }: { userId: string }) {
         const res = await fetch(`/api/requests?tab=${tab}`, { headers: { Authorization: `Bearer ${token}` } });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error ?? "Unable to load requests.");
-        if (!cancelled) { setLoaded({ tab, requests: body.requests ?? [] }); setError(null); }
+        if (!cancelled) { setLoaded({ tab, requests: body.requests ?? [] }); setLoadError(null); }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Unable to load requests.");
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Unable to load requests.");
       }
     })();
     return () => { cancelled = true; };
@@ -39,8 +42,9 @@ export function RequestsInbox({ userId }: { userId: string }) {
   useEffect(() => {
     const db = getSupabaseBrowser();
     const column = tab === "incoming" ? "payer_id" : "requester_id";
+    // A fresh name per run: supabase-js reuses a same-named channel that may still be leaving.
     const channel = db
-      .channel(`requests-${column}-${userId}`)
+      .channel(`requests-${column}-${userId}-${crypto.randomUUID()}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "requests", filter: `${column}=eq.${userId}` }, reload)
       .subscribe();
     return () => { db.removeChannel(channel).catch(() => {}); };
@@ -48,16 +52,19 @@ export function RequestsInbox({ userId }: { userId: string }) {
 
   async function answer(r: RequestWithUsers, action: "pay" | "decline") {
     setBusyId(r.id);
-    setError(null);
+    setActionError(null);
+    let txHash = action === "pay" ? sentHashes[r.id] : undefined;
     try {
-      let txHash: string | undefined;
-      if (action === "pay") {
-        if (!r.requester_username) throw new Error("This requester has no username yet.");
-        // Send first: the request is only marked paid once the transfer exists.
-        ({ txHash } = await sendUSDC(r.requester_username, r.amount, r.note ?? undefined));
-      }
+      // Fail before any money moves if the session is gone.
       const token = await getAccessToken();
       if (!token) throw new Error("Session expired. Please log in again.");
+      if (action === "pay" && !txHash) {
+        if (!r.requester_username) throw new Error("This requester has no username yet.");
+        // Send first: the request is only marked paid once the transfer exists.
+        ({ txHash } = await sendUSDC(r.requester_username, String(r.amount), r.note ?? undefined));
+        const sent = txHash;
+        setSentHashes((prev) => ({ ...prev, [r.id]: sent }));
+      }
       const res = await fetch(`/api/requests/${r.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -65,8 +72,10 @@ export function RequestsInbox({ userId }: { userId: string }) {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? "Unable to update request.");
+      setSentHashes((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== r.id)));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to update request.");
+      const message = e instanceof Error ? e.message : "Unable to update request.";
+      setActionError(txHash ? `Payment sent, but it couldn't be recorded: ${message} Tap Pay to retry without sending again.` : message);
     } finally {
       setBusyId(null);
       reload();
@@ -87,7 +96,7 @@ export function RequestsInbox({ userId }: { userId: string }) {
         ))}
       </div>
 
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {(actionError ?? loadError) && <p role="alert" className="text-sm text-red-600">{actionError ?? loadError}</p>}
       {!requests ? <p role="status" className="text-sm text-zinc-600">Loading requests…</p> : (
         <div className="space-y-3">
           {requests.length === 0 && <p className="text-zinc-500">No requests.</p>}
