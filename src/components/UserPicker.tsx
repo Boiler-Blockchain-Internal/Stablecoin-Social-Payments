@@ -91,7 +91,7 @@ function UserPickerField({ value, onChange, selectedUser, onSelect, placeholder 
               event.preventDefault(); setOpen(true);
               setActive((index) => users.length ? index < 0 ? (event.key === "ArrowDown" ? 0 : users.length - 1) : (index + (event.key === "ArrowDown" ? 1 : users.length - 1)) % users.length : -1);
             }
-            if (event.key === "Enter" && open && users[active]) { event.preventDefault(); select(users[active]); }
+            if (event.key === "Enter" && open && users[active]) { event.preventDefault(); event.stopPropagation(); select(users[active]); }
           }}
           className="min-w-0 w-full rounded-lg border border-zinc-300 px-3 py-2 focus:outline-2 focus:outline-zinc-900 disabled:opacity-50" />
         {signedIn && input && <button type="button" disabled={disabled} onClick={() => select(null)} className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm">Clear</button>}
