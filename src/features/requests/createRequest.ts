@@ -9,6 +9,10 @@ export type PaymentRequest = {
   created_at: string;
 };
 
+/**
+ * Ask another user (by username) to pay you. Pass the Privy access token from `getAccessToken()`;
+ * the API route takes the requester from that token, never from the client.
+ */
 export async function createRequest(
   toUsername: string,
   amount: string,
@@ -23,7 +27,7 @@ export async function createRequest(
     headers,
     body: JSON.stringify({ toUsername, amount, note, splitId }),
   });
-  const body = await res.json();
+  const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? "Failed to create request.");
   return body.request;
 }

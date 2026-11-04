@@ -3,37 +3,32 @@
 import { useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { UserPicker } from "@/features/auth/UserPicker";
+import { createRequest } from "./createRequest";
+import { NOTE_MAX } from "./validation";
 
-export function CreateRequestForm() {
+export function CreateRequestForm({ onCreated }: { onCreated?: () => void }) {
   const { getAccessToken } = usePrivy();
   const [toUsername, setToUsername] = useState("");
   const [amount, setAmount] = useState("1");
   const [note, setNote] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setStatus("");
+    setStatus(null);
     setLoading(true);
     try {
       const token = await getAccessToken();
-      if (!token) throw new Error("Not authenticated.");
-      // createRequest uses the API route with bearer token internally in production;
-      // for now call via fetch to /api/requests
-      const res = await fetch("/api/requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ toUsername, amount, note }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Failed.");
-      setStatus("Request sent!");
+      if (!token) throw new Error("Session expired. Please log in again.");
+      await createRequest(toUsername, amount, note, undefined, token);
+      setStatus({ ok: true, text: `Requested ${amount} USDC from @${toUsername}.` });
       setToUsername("");
       setAmount("1");
       setNote("");
+      onCreated?.();
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Failed.");
+      setStatus({ ok: false, text: err instanceof Error ? err.message : "Failed." });
     } finally {
       setLoading(false);
     }
@@ -42,20 +37,21 @@ export function CreateRequestForm() {
   return (
     <form onSubmit={handleSubmit} className="space-y-3 rounded-xl border bg-white p-4 shadow">
       <h2 className="font-semibold">Request payment</h2>
+      <UserPicker value={toUsername} onChange={setToUsername} label="From" placeholder="Search by username" />
       <div>
-        <label className="text-xs font-medium text-zinc-500">To (username)</label>
-        <UserPicker value={toUsername} onChange={setToUsername} placeholder="username" />
+        <label htmlFor="request-amount" className="block text-sm font-medium">Amount (USDC)</label>
+        <input id="request-amount" type="number" inputMode="decimal" min="0.01" step="0.01" required value={amount}
+          onChange={(e) => setAmount(e.target.value)} className="w-full rounded-lg border border-zinc-300 px-3 py-2" />
       </div>
       <div>
-        <label className="text-xs font-medium text-zinc-500">Amount (USDC)</label>
-        <input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full rounded border p-2" />
+        <label htmlFor="request-note" className="block text-sm font-medium">Note</label>
+        <input id="request-note" type="text" maxLength={NOTE_MAX} value={note} onChange={(e) => setNote(e.target.value)}
+          className="w-full rounded-lg border border-zinc-300 px-3 py-2" placeholder="What's it for? (optional)" />
       </div>
-      <div>
-        <label className="text-xs font-medium text-zinc-500">Note</label>
-        <input type="text" value={note} onChange={(e) => setNote(e.target.value)} className="w-full rounded border p-2" placeholder="Optional note" />
-      </div>
-      <button type="submit" disabled={loading} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Send Request</button>
-      {status && <p className="text-sm">{status}</p>}
+      <button type="submit" disabled={loading || !toUsername} className="rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-50">
+        {loading ? "Sending…" : "Send request"}
+      </button>
+      {status && <p role={status.ok ? "status" : "alert"} className={`text-sm ${status.ok ? "text-emerald-700" : "text-red-600"}`}>{status.text}</p>}
     </form>
   );
 }

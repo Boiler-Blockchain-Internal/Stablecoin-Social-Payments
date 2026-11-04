@@ -3,8 +3,8 @@
 import type { PaymentRequest } from "@/features/requests/createRequest";
 
 export type RequestWithUsers = PaymentRequest & {
-  requester_username: string;
-  payer_username: string;
+  requester_username: string | null;
+  payer_username: string | null;
 };
 
 export function StatusBadge({ status }: { status: "pending" | "paid" | "declined" }) {
