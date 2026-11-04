@@ -7,6 +7,8 @@ import { usePrivy } from "@privy-io/react-auth";
 import { UserPicker } from "@/features/auth/UserPicker";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 import { isValidUsername, normalizeUsername, USERNAME_HELP } from "@/lib/username";
+import { AddBillForm } from "./AddBillForm";
+import { BillList } from "./BillList";
 import { GroupsGate } from "./GroupsGate";
 import { isUuid } from "./validation";
 
@@ -28,6 +30,7 @@ function GroupView({ groupId, me }: { groupId: string; me: Me }) {
   const [candidate, setCandidate] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [billsVersion, setBillsVersion] = useState(0);
 
   useEffect(() => {
     if (!validId) return;
@@ -130,16 +133,11 @@ function GroupView({ groupId, me }: { groupId: string; me: Me }) {
 
       {iAmMember && (
         <form onSubmit={addMember} className="space-y-2" aria-busy={busy === "add"}>
-          <label className="block text-sm font-medium">Add a member</label>
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <UserPicker value={candidate} onChange={(value) => { setCandidate(value); setNotice(null); }} />
-            </div>
-            <button type="submit" disabled={!!busy || !candidate}
-              className="min-h-11 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50">
-              {busy === "add" ? "Adding…" : "Add"}
-            </button>
-          </div>
+          <UserPicker label="Add a member" value={candidate} onChange={(value) => { setCandidate(value); setNotice(null); }} />
+          <button type="submit" disabled={!!busy || !candidate}
+            className="min-h-11 w-full rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50">
+            {busy === "add" ? "Adding…" : "Add"}
+          </button>
         </form>
       )}
 
@@ -175,6 +173,16 @@ function GroupView({ groupId, me }: { groupId: string; me: Me }) {
         )}
       </div>
       {!iAmMember && <p className="text-sm text-zinc-600">You&apos;re not a member of this group.</p>}
+
+      {iAmMember && members.length >= 2 && (
+        <AddBillForm members={members} myId={me.id}
+          submit={(body) => callApi(`/api/groups/${groupId}/splits`, { method: "POST", body: JSON.stringify(body) })}
+          onAdded={() => {
+            setBillsVersion((version) => version + 1);
+            setNotice({ kind: "success", text: "Bill added. Requests sent." });
+          }} />
+      )}
+      <BillList key={billsVersion} groupId={groupId} />
     </section>
   );
 }

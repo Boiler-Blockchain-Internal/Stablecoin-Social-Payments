@@ -1,7 +1,10 @@
 // SERVER ONLY. Shared helpers for the groups API routes. Never import from a "use client" file.
 import { UnauthorizedError } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
+import { toUsdcUnits } from "@/lib/chain";
 import { isValidUsername, normalizeUsername } from "@/lib/username";
+import { parseAmount } from "@/features/requests/validation";
+import { splitEvenly, sumUnits, type Share } from "./splits";
 import { GROUP_NAME_MAX, isUuid } from "./validation";
 
 /** An expected failure with a message that is safe to show the user. */
@@ -83,4 +86,27 @@ export async function resolveMembers(value: unknown, caller: CallerUser): Promis
   const missing = usernames.filter((username) => !found.has(username));
   if (missing.length) throw new GroupError(`No user found for ${missing.map((u) => `@${u}`).join(", ")}.`, 404);
   return usernames.map((username) => found.get(username)!);
+}
+
+/** Works out each member's share of a bill. memberIds must come from the database, not the client. */
+export function parseBillShares(body: Record<string, unknown>, totalUnits: bigint, memberIds: string[]): Share[] {
+  if (body.mode === "even") {
+    const shares = splitEvenly(totalUnits, memberIds);
+    if (shares.some((share) => share.units === BigInt(0))) throw new GroupError("That total is too small to split.", 400);
+    return shares;
+  }
+  if (body.mode !== "custom") throw new GroupError("Choose an even or custom split.", 400);
+  if (!Array.isArray(body.shares)) throw new GroupError("Custom splits need an amount for each person.", 400);
+
+  const shares: Share[] = [];
+  for (const item of body.shares as unknown[]) {
+    const { userId, amount } = (item ?? {}) as { userId?: unknown; amount?: unknown };
+    if (typeof userId !== "string" || !memberIds.includes(userId)) throw new GroupError("Everyone in a split must be in this group.", 400);
+    if (shares.some((share) => share.userId === userId)) throw new GroupError("Each person can only have one amount.", 400);
+    const parsed = parseAmount(amount);
+    if (!parsed) throw new GroupError("Enter a valid amount for each person, or leave it blank.", 400);
+    shares.push({ userId, units: toUsdcUnits(parsed) });
+  }
+  if (sumUnits(shares.map((share) => share.units)) !== totalUnits) throw new GroupError("The amounts must add up to the total.", 400);
+  return shares;
 }
