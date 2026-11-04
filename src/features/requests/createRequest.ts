@@ -10,26 +10,24 @@ export type PaymentRequest = {
 };
 
 /**
- * Ask another user (by username) to pay you.
- *
- * Agreed shape; build against this signature.
- *
- * TODO (requests owner):
- * - POST to an API route (e.g. /api/requests) with `Authorization: Bearer <getAccessToken()>`.
- *   The route calls requirePrivyUser(), resolves toUsername → payer_id, and inserts into
- *   `requests` with the service role key. Requester is the verified caller, never a client field.
- * - Payers see new requests live via a Supabase realtime subscription on `requests`.
- * - `splitId` links the request to a group split (set by the groups feature).
+ * Ask another user (by username) to pay you. Pass the Privy access token from `getAccessToken()`;
+ * the API route takes the requester from that token, never from the client.
  */
 export async function createRequest(
   toUsername: string,
   amount: string,
   note?: string,
   splitId?: string,
+  authToken?: string,
 ): Promise<PaymentRequest> {
-  void toUsername;
-  void amount;
-  void note;
-  void splitId;
-  throw new Error("createRequest: not implemented yet");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const res = await fetch("/api/requests", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ toUsername, amount, note, splitId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "Failed to create request.");
+  return body.request;
 }
