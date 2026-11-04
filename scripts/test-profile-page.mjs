@@ -21,7 +21,9 @@ await build({
   bundle: true, jsx: "automatic", define: { "process.env": JSON.stringify({ NODE_ENV: "development" }) }, outfile: resolve(directory, "fixture.js"),
   plugins: [{ name: "mock-privy", setup(builder) {
     builder.onResolve({ filter: /^@privy-io\/react-auth$/ }, () => ({ path: "privy", namespace: "fixture" }));
-    builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ resolveDir: process.cwd(), contents: `
+    // Wallet behavior has its own full component/RPC suite; isolate profile tests.
+    builder.onResolve({ filter: /^\.\/WalletCard$/ }, () => ({ path: "wallet", namespace: "fixture" }));
+    builder.onLoad({ filter: /.*/, namespace: "fixture" }, ({ path }) => ({ resolveDir: process.cwd(), contents: path === "wallet" ? "export function WalletCard(){return null;}" : `
       import {useSyncExternalStore} from 'react';
       const makeState=(account,ready=true)=>({ready,authenticated:account!=='signed-out',user:account==='signed-out'?null:{id:account}});
       let state=makeState(new URLSearchParams(location.search).get('account')??'account-a');
