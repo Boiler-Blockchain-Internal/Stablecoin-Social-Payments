@@ -14,3 +14,8 @@ create unique index transactions_client_reference_key
 create unique index transactions_one_open_send_per_sender_key
   on public.transactions (from_user)
   where client_reference is not null and status = 'pending';
+
+-- A request is settled by at most one live payment, so a retry can never pay it twice.
+create unique index transactions_one_payment_per_request_key
+  on public.transactions (request_id)
+  where request_id is not null and status <> 'failed';

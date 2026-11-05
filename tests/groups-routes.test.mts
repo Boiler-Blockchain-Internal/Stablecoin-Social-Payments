@@ -30,7 +30,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
       if (operation === "insert") {
         if (failInsertInto === table) return { data: null, error: { message: "private database detail" } };
         const items = (Array.isArray(payload) ? payload : [payload]).map((row): Row => (
-          table === "groups" ? { id: `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`, created_at: "now", ...row } : { ...row }
+          table === "groups" || table === "splits" ? { id: `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`, created_at: "now", ...row } : { ...row }
         ));
         const duplicate = table === "group_members" && items.some((item) => tables.group_members.some(
           (row) => row.group_id === item.group_id && row.user_id === item.user_id));
@@ -72,6 +72,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
 const { POST: createGroup } = await import("../src/app/api/groups/route");
 const { POST: addMember } = await import("../src/app/api/groups/[id]/members/route");
 const { DELETE: removeMember } = await import("../src/app/api/groups/[id]/members/[userId]/route");
+const { POST: addBill } = await import("../src/app/api/groups/[id]/splits/route");
 
 function request(body: unknown, account = "account-a", method = "POST") {
   return new Request("http://localhost/api/groups", {
@@ -93,6 +94,15 @@ function remove(groupId: string, userId: string, account = "account-a") {
   return removeMember(request(null, account, "DELETE"), { params: Promise.resolve({ id: groupId, userId }) });
 }
 const memberIds = () => tables.group_members.map((row) => row.user_id);
+function bill(groupId: string, body: unknown, account = "account-a") {
+  return addBill(request(body, account), { params: Promise.resolve({ id: groupId }) });
+}
+/** Alice, Bob and Carol in one group; returns its id. */
+async function threePeople() {
+  const id = await aliceAndBob();
+  await add(id, "carol");
+  return id;
+}
 
 beforeEach(() => {
   failInsertInto = null;
@@ -105,6 +115,8 @@ beforeEach(() => {
     ],
     groups: [],
     group_members: [],
+    splits: [],
+    requests: [],
   };
 });
 
@@ -207,4 +219,87 @@ test("removing rejects bad ids and outsiders", async () => {
   assert.equal((await remove(id, B, "account-c")).status, 403);
   assert.equal((await remove(id, B, "invalid")).status, 401);
   assert.deepEqual(memberIds(), [A, B]);
+});
+
+test("an even bill creates one request per other member, and none for the caller", async () => {
+  const id = await threePeople();
+  const response = await bill(id, { description: " Dinner ", total: "10", mode: "even", requester_id: B });
+  assert.equal(response.status, 201);
+  const { split, requests } = await response.json();
+  assert.equal(split.group_id, id);
+  assert.equal(split.created_by, A);
+  assert.equal(split.description, "Dinner");
+  assert.equal(split.total, "10");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(tables.requests.map((row) => row.payer_id).sort(), [B, C]);
+  assert.ok(tables.requests.every((row) => (
+    row.requester_id === A && row.split_id === split.id && row.note === "Dinner" && row.status === "pending"
+  )));
+  // A has the lowest id, so A keeps the extra base unit; B and C owe the smaller share.
+  assert.ok(tables.requests.every((row) => row.amount === "3.333333"));
+});
+
+test("a custom bill uses the given amounts and skips members left out", async () => {
+  const id = await threePeople();
+  const response = await bill(id, {
+    description: "Taxi", total: "10.50", mode: "custom",
+    shares: [{ userId: A, amount: "4" }, { userId: B, amount: "6.5" }],
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(tables.requests.map((row) => [row.payer_id, row.amount]), [[B, "6.5"]]);
+});
+
+test("the member who adds a bill is the one owed, whoever created the group", async () => {
+  const id = await threePeople();
+  assert.equal((await bill(id, { description: "Taxi", total: "2", mode: "even" }, "account-b")).status, 201);
+  assert.ok(tables.requests.every((row) => row.requester_id === B));
+  assert.deepEqual(tables.requests.map((row) => row.payer_id).sort(), [A, C]);
+});
+
+test("bills reject outsiders and bad input without writing", async () => {
+  const id = await threePeople();
+  const even = { description: "Dinner", total: "10", mode: "even" };
+  const custom = (shares: unknown) => ({ description: "Dinner", total: "10", mode: "custom", shares });
+
+  assert.equal((await bill(id, even, "invalid")).status, 401);
+  assert.equal((await bill("not-a-uuid", even)).status, 400);
+  assert.equal((await bill("00000000-0000-4000-8000-999999999999", even)).status, 404);
+  assert.equal((await bill(id, { ...even, description: "   " })).status, 400);
+  assert.equal((await bill(id, { ...even, description: "x".repeat(141) })).status, 400);
+  assert.equal((await bill(id, { ...even, total: "0" })).status, 400);
+  assert.equal((await bill(id, { ...even, total: "1.1234567" })).status, 400);
+  assert.equal((await bill(id, { ...even, total: "10001" })).status, 400);
+  assert.equal((await bill(id, { ...even, total: "0.000002" })).status, 400);
+  assert.equal((await bill(id, { ...even, mode: "half" })).status, 400);
+  assert.equal((await bill(id, custom("nope"))).status, 400);
+  assert.equal((await bill(id, custom([null]))).status, 400);
+  // Shares that don't add up, name a non-member, repeat someone, or have a bad amount.
+  assert.equal((await bill(id, custom([{ userId: B, amount: "9" }]))).status, 400);
+  assert.equal((await bill(id, custom([{ userId: N, amount: "10" }]))).status, 400);
+  assert.equal((await bill(id, custom([{ userId: B, amount: "5" }, { userId: B, amount: "5" }]))).status, 400);
+  assert.equal((await bill(id, custom([{ userId: B, amount: "-10" }]))).status, 400);
+  // The caller can't be the only person on the bill.
+  assert.equal((await bill(id, custom([{ userId: A, amount: "10" }]))).status, 400);
+
+  assert.equal(tables.splits.length, 0);
+  assert.equal(tables.requests.length, 0);
+});
+
+test("non-members can't add a bill, and a group of one has nobody to split with", async () => {
+  const id = await aliceAndBob();
+  const even = { description: "Dinner", total: "10", mode: "even" };
+  assert.equal((await bill(id, even, "account-c")).status, 403);
+  const { group } = await (await createGroup(request({ name: "Solo" }))).json();
+  assert.equal((await bill(group.id, even)).status, 400);
+  assert.equal(tables.splits.length, 0);
+});
+
+test("a failed request insert removes the split and hides database details", async () => {
+  const id = await threePeople();
+  failInsertInto = "requests";
+  const response = await bill(id, { description: "Dinner", total: "10", mode: "even" });
+  assert.equal(response.status, 500);
+  assert.doesNotMatch(await response.text(), /private/);
+  assert.equal(tables.splits.length, 0);
+  assert.equal(tables.requests.length, 0);
 });

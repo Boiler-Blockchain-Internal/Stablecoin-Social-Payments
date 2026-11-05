@@ -1,5 +1,5 @@
 // SERVER ONLY. Verifies Base Sepolia evidence before writing a payment result.
-import { decodeEventLog, decodeFunctionData, isAddress, type Address, type Hash } from "viem";
+import { decodeEventLog, decodeFunctionData, isAddress, parseAbiItem, type Address, type Hash } from "viem";
 import {
   entryPoint06Abi,
   entryPoint06Address,
@@ -114,6 +114,18 @@ export async function preparePayment(privyId: string, input: Record<string, unkn
     return { payment: intent, created: false, senderAddress: sender.wallet_address, recipientAddress: recipientWallet };
   }
 
+  if (requestId) {
+    // One live payment per request: a retry after a lost link must reuse it, never send again.
+    const prior = await db.from("transactions").select("id, from_user, to_user, status, request_id")
+      .eq("request_id", requestId).in("status", ["pending", "confirmed"]).maybeSingle();
+    if (prior.error) throw prior.error;
+    if (prior.data?.status === "confirmed") {
+      await settleLinkedRequest(prior.data);
+      throw new SendApiError("This request is already paid.", 409);
+    }
+    if (prior.data) throw new SendApiError("A payment for this request is already in progress. Reconcile it before trying again.", 409);
+  }
+
   const openSend = await db.from("transactions")
     .select("id, from_user, to_user, amount, note, tx_hash, status, request_id, client_reference, created_at")
     .eq("from_user", sender.id).eq("status", "pending").not("client_reference", "is", null)
@@ -214,9 +226,24 @@ function receiptHasFailedUserOperation(receipt: Awaited<ReturnType<typeof public
   });
 }
 
+const CLOCK_SKEW_SECONDS = 120;
+
+/**
+ * A confirmed payment made for a request settles that request in the same step, so the request
+ * can never stay payable after its money moved (and the browser never has to finish the job).
+ */
+async function settleLinkedRequest(payment: Pick<PaymentIntent, "from_user" | "to_user" | "request_id">) {
+  if (!payment.request_id) return;
+  const { error } = await getSupabaseAdmin().from("requests").update({ status: "paid" })
+    .eq("id", payment.request_id).eq("status", "pending")
+    .eq("payer_id", payment.from_user).eq("requester_id", payment.to_user);
+  if (error) throw error;
+}
+
 async function ensureAfterIntent(receipt: Awaited<ReturnType<typeof publicClient.getTransactionReceipt>>, payment: PaymentIntent) {
   const block = await publicClient.getBlock({ blockHash: receipt.blockHash });
-  const intentTimeSeconds = Math.floor(new Date(payment.created_at).getTime() / 1000);
+  // Allow for clock skew between the database and the sequencer.
+  const intentTimeSeconds = Math.floor(new Date(payment.created_at).getTime() / 1000) - CLOCK_SKEW_SECONDS;
   if (!Number.isFinite(intentTimeSeconds) || Number(block.timestamp) < intentTimeSeconds) {
     throw new SendApiError("This transaction predates the payment request and cannot be attached to it.", 409);
   }
@@ -239,7 +266,10 @@ export async function recordPaymentHash(privyId: string, paymentId: string, rawH
   if (typeof rawHash !== "string" || !/^0x[0-9a-f]{64}$/i.test(rawHash)) throw new SendApiError("A valid transaction hash is required.", 400);
   const hash = rawHash.toLowerCase() as Hash;
   if (payment.tx_hash && payment.tx_hash !== hash) throw new SendApiError("This payment already has a different transaction hash.", 409);
-  if (payment.status !== "pending") return { payment };
+  if (payment.status !== "pending") {
+    if (payment.status === "confirmed") await settleLinkedRequest(payment);
+    return { payment };
+  }
 
   const db = getSupabaseAdmin();
   const [sender, recipient] = await Promise.all([
@@ -291,16 +321,56 @@ export async function recordPaymentHash(privyId: string, paymentId: string, rawH
     .select("id, from_user, to_user, amount, note, tx_hash, status, request_id, client_reference, created_at").maybeSingle();
   if (update.error?.code === "23505") throw new SendApiError("This transaction is already attached to another payment.", 409);
   if (update.error) throw update.error;
-  if (update.data) return { payment: update.data as PaymentIntent };
+  if (update.data) {
+    if (status === "confirmed") await settleLinkedRequest(update.data as PaymentIntent);
+    return { payment: update.data as PaymentIntent };
+  }
 
   const current = await getPaymentForCaller(privyId, payment.id);
-  if (current.tx_hash === hash && current.status === status) return { payment: current };
+  if (current.tx_hash === hash && current.status === status) {
+    if (status === "confirmed") await settleLinkedRequest(current);
+    return { payment: current };
+  }
   throw new SendApiError("The payment changed while it was being recorded. Check its status before retrying.", 409);
+}
+
+const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+// Base Sepolia makes a block every ~2s; public RPCs cap log queries at about 10k blocks (~5.5h).
+const MAX_LOG_BLOCKS = BigInt(9_000);
+
+/** A USDC transfer matching the intent that landed after it was created, if any. */
+async function findMatchingTransfer(payment: PaymentIntent): Promise<Hash | null> {
+  const db = getSupabaseAdmin();
+  const [sender, recipient] = await Promise.all([
+    db.from("users").select("wallet_address").eq("id", payment.from_user).maybeSingle(),
+    db.from("users").select("wallet_address").eq("id", payment.to_user).maybeSingle(),
+  ]);
+  if (sender.error || recipient.error) throw sender.error ?? recipient.error;
+  const from = sender.data?.wallet_address;
+  const to = recipient.data?.wallet_address;
+  if (!from || !to || !isAddress(from) || !isAddress(to)) return null;
+  const latest = await publicClient.getBlockNumber();
+  const ageBlocks = BigInt(Math.ceil((Date.now() - new Date(payment.created_at).getTime()) / 2000) + CLOCK_SKEW_SECONDS);
+  const span = ageBlocks < MAX_LOG_BLOCKS ? ageBlocks : MAX_LOG_BLOCKS;
+  const logs = await publicClient.getLogs({
+    address: USDC_ADDRESS, event: transferEvent, args: { from: from as Address, to: to as Address },
+    fromBlock: latest > span ? latest - span : BigInt(0), toBlock: latest,
+  });
+  const expected = toUsdcUnits(String(payment.amount));
+  const match = logs.find((log) => log.args.value === expected);
+  return match?.transactionHash ?? null;
 }
 
 export async function cancelUnsubmittedPayment(privyId: string, paymentId: string) {
   const payment = await getPaymentForCaller(privyId, paymentId);
   if (payment.status !== "pending" || payment.tx_hash) throw new SendApiError("This payment can no longer be cancelled as unsubmitted.", 409);
+  // If the wallet did send, record that transfer instead of cancelling and allowing a second one.
+  const landed = await findMatchingTransfer(payment);
+  if (landed) {
+    const recorded = await recordPaymentHash(privyId, paymentId, landed);
+    if (recorded.payment.status !== "pending") return recorded;
+    throw new SendApiError("A matching transfer was found on-chain and is still confirming. Check again shortly.", 409);
+  }
   const { data, error } = await getSupabaseAdmin().from("transactions").update({ status: "failed" })
     .eq("id", payment.id).eq("status", "pending").is("tx_hash", null)
     .select("id, from_user, to_user, amount, note, tx_hash, status, request_id, client_reference, created_at").maybeSingle();

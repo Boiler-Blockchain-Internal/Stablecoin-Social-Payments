@@ -33,6 +33,7 @@ let transactions = new Map<string, Row>();
 let failUpdateInto: string | null = null;
 let nextId = 0;
 let mockedChainId = 84532;
+let chainLogs: { args: { value: bigint }; transactionHash: Hash }[] = [];
 
 mock.module("../src/lib/privy.ts", { namedExports: {
   UnauthorizedError,
@@ -75,6 +76,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
         return query;
       },
       is: (key: string, value: unknown) => { filters.push((row) => (row[key] ?? null) === value); return query; },
+      in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return query; },
       or: (expression: string) => {
         const match = expression.match(/^tx_hash\.is\.null,tx_hash\.eq\.(.+)$/);
         if (match) orFilters.push((row) => row.tx_hash == null || row.tx_hash === match[1]);
@@ -107,6 +109,8 @@ mock.module("../src/lib/chain.ts", { namedExports: {
       if (!receipt) throw new Error("transaction not found");
       return receipt;
     },
+    getBlockNumber: async () => BigInt(1_000_000),
+    getLogs: async () => chainLogs,
     getBlock: async () => ({ timestamp: BigInt(Math.floor(Date.parse("2026-11-04T00:00:01.000Z") / 1000)) }),
     getTransaction: async ({ hash }: { hash: Hash }) => {
       const transaction = transactions.get(hash);
@@ -179,6 +183,7 @@ beforeEach(() => {
   failUpdateInto = null;
   nextId = 0;
   mockedChainId = 84532;
+  chainLogs = [];
   receipts = new Map();
   transactions = new Map();
   tables = {
@@ -357,6 +362,39 @@ test("database failure leaves the pending intent retryable and never trusts clie
   assert.equal(retry.status, 200);
   assert.equal((await retry.json()).payment.status, "confirmed");
   assert.equal(tables.transactions.length, 1);
+});
+
+test("confirming a request payment settles the request, and it can't be paid again", async () => {
+  tables.requests.push({ id: REQUEST_ID, requester_id: B, payer_id: A, amount: "1.25", status: "pending" });
+  const prepared = await prepare(request(prepareBody({ requestId: REQUEST_ID })));
+  const { payment } = await prepared.json();
+  receipts.set(HASH, successReceipt());
+  assert.equal((await byId(record, payment.id, { txHash: HASH })).status, 200);
+  assert.equal(tables.requests[0].status, "paid");
+  const again = await prepare(request(prepareBody({ requestId: REQUEST_ID, clientReference: SECOND_REFERENCE })));
+  assert.equal(again.status, 409);
+  assert.equal(tables.transactions.length, 1);
+});
+
+test("a confirmed payment heals a request left pending and blocks a second send", async () => {
+  tables.requests.push({ id: REQUEST_ID, requester_id: B, payer_id: A, amount: "1.25", status: "pending" });
+  tables.transactions.push({ id: "tx-1", from_user: A, to_user: B, amount: "1.25", note: "lunch", tx_hash: HASH,
+    status: "confirmed", request_id: REQUEST_ID, client_reference: REFERENCE, created_at: "2026-11-04T00:00:00.000Z" });
+  const again = await prepare(request(prepareBody({ requestId: REQUEST_ID, clientReference: SECOND_REFERENCE })));
+  assert.equal(again.status, 409);
+  assert.equal(tables.requests[0].status, "paid");
+  assert.equal(tables.transactions.length, 1);
+});
+
+test("cancelling records a matching on-chain transfer instead of allowing a second send", async () => {
+  const { payment } = await preparedPayment();
+  receipts.set(HASH, successReceipt());
+  chainLogs = [{ args: { value: BigInt(999) }, transactionHash: OTHER_HASH }, { args: { value: BigInt(1_250_000) }, transactionHash: HASH }];
+  const response = await byId(record, payment.id, { action: "cancel" });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.payment.status, "confirmed");
+  assert.equal(body.payment.tx_hash, HASH);
 });
 
 test("unsubmitted intents can be cancelled after a rejected wallet prompt", async () => {

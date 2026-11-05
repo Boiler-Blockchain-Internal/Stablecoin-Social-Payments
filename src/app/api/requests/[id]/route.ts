@@ -29,10 +29,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const row = found.data as RequestRow | null;
     if (!row) throw new RequestError("Request not found.", 404);
     if (row.payer_id !== caller.id) throw new RequestError("Only the person asked to pay can answer this request.", 403);
+    if (action === "pay" && row.status === "paid") {
+      // Confirming the payment already settled the request; repeating the call is harmless.
+      const settled = await db.from("transactions").select("id").eq("request_id", row.id)
+        .eq("tx_hash", txHash as string).eq("status", "confirmed").maybeSingle();
+      if (settled.error) throw settled.error;
+      if (settled.data) return Response.json({ status: "paid" });
+    }
     if (row.status !== "pending") throw new RequestError("This request was already answered.", 409);
     if (action === "decline") {
       const inFlight = await db.from("transactions").select("id").eq("request_id", row.id)
-        .eq("status", "pending").not("client_reference", "is", null).maybeSingle();
+        .in("status", ["pending", "confirmed"]).maybeSingle();
       if (inFlight.error) throw inFlight.error;
       if (inFlight.data) throw new RequestError("A payment is being processed for this request. Reconcile it before declining.", 409);
     }

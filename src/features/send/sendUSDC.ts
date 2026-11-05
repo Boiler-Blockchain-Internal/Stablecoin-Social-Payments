@@ -12,6 +12,8 @@ const RECOVERY_KEY = "stablepay:payment-recovery";
 const RECOVERY_EVENT = "stablepay:payment-recovery";
 
 export type PaymentRecovery = {
+  /** Privy user id; recovery is per account so a second login on this browser isn't blocked. */
+  owner: string;
   paymentId: string;
   txHash?: string;
   toUsername: string;
@@ -44,7 +46,9 @@ function subscribeToRecovery(callback: () => void) {
 }
 
 export function usePaymentRecovery(): PaymentRecovery | null {
-  return useSyncExternalStore(subscribeToRecovery, recoverySnapshotForClient, () => null);
+  const { user } = usePrivy();
+  const recovery = useSyncExternalStore(subscribeToRecovery, recoverySnapshotForClient, () => null);
+  return recovery && recovery.owner === user?.id ? recovery : null;
 }
 
 export class PaymentSendError extends Error {
@@ -63,8 +67,9 @@ export function readPaymentRecovery(): PaymentRecovery | null {
     const value: unknown = JSON.parse(window.localStorage.getItem(RECOVERY_KEY) ?? "null");
     if (!value || typeof value !== "object") return null;
     const item = value as Partial<PaymentRecovery>;
-    if (typeof item.paymentId !== "string" || typeof item.toUsername !== "string" || typeof item.amount !== "string") return null;
+    if (typeof item.owner !== "string" || typeof item.paymentId !== "string" || typeof item.toUsername !== "string" || typeof item.amount !== "string") return null;
     return {
+      owner: item.owner,
       paymentId: item.paymentId,
       ...(typeof item.txHash === "string" ? { txHash: item.txHash } : {}),
       toUsername: item.toUsername,
@@ -149,7 +154,8 @@ export function friendlySendError(error: unknown): string {
 }
 
 export function useSendUSDC() {
-  const { getAccessToken } = usePrivy();
+  const { getAccessToken, user } = usePrivy();
+  const owner = user?.id;
   const { client } = useSmartWallets();
 
   const findOpenPayment = useCallback(async (): Promise<PaymentRecovery | null> => {
@@ -161,8 +167,9 @@ export function useSendUSDC() {
     } & ApiError>("/api/transactions", token);
     if (!response.ok) throw new Error(apiMessage(data, "Unable to check for an earlier payment."));
     const payment = data.payment;
-    if (!payment || payment.status !== "pending" || !data.toUsername) return null;
+    if (!payment || payment.status !== "pending" || !data.toUsername || !owner) return null;
     const recovery: PaymentRecovery = {
+      owner,
       paymentId: payment.id,
       ...(payment.tx_hash ? { txHash: payment.tx_hash } : {}),
       toUsername: data.toUsername,
@@ -172,7 +179,7 @@ export function useSendUSDC() {
     };
     savePaymentRecovery(recovery);
     return recovery;
-  }, [getAccessToken]);
+  }, [getAccessToken, owner]);
 
   const retryRecord = useCallback(async (recovery: PaymentRecovery, submittedHash?: string) => {
     const token = await getAccessToken();
@@ -188,6 +195,11 @@ export function useSendUSDC() {
       token,
       { txHash },
     );
+    if (response.status === 403 || response.status === 404) {
+      // Not this account's payment (or gone): drop the stale local record.
+      clearPaymentRecovery(recovery.paymentId);
+      throw new Error(apiMessage(data, "This payment can't be reconciled from this account."));
+    }
     if (!response.ok && response.status !== 202) {
       if (!recovery.txHash && response.status < 500) savePaymentRecovery(recovery);
       throw new Error(apiMessage(data, "Unable to reconcile this payment."));
@@ -199,11 +211,23 @@ export function useSendUSDC() {
       // the user replace it instead of pinning a bad hash into recovery state.
       savePaymentRecovery(recovery);
     }
-    if (payment.status === "confirmed" && (!recovery.requestId || payment.request_id === recovery.requestId)) {
-      clearPaymentRecovery(recovery.paymentId);
-    }
+    // Confirming also settles a linked request on the server, so nothing is left to retry.
+    if (payment.status === "confirmed") clearPaymentRecovery(recovery.paymentId);
     if (payment.status === "failed") clearPaymentRecovery(recovery.paymentId);
     return payment;
+  }, [getAccessToken]);
+
+  /**
+   * Close an intent whose wallet prompt never produced a hash. The server first looks on-chain for a
+   * matching transfer and records it instead, so cancelling can't open the door to a second payment.
+   */
+  const cancelPayment = useCallback(async (recovery: PaymentRecovery) => {
+    const token = await getAccessToken();
+    if (!token) throw new Error("Session expired. Please log in again.");
+    const { response, data } = await apiJson<PaymentResult & ApiError>(`/api/transactions/${recovery.paymentId}`, token, { action: "cancel" });
+    if (!response.ok) throw new Error(apiMessage(data, "This payment could not be cancelled."));
+    if (data.payment && data.payment.status !== "pending") clearPaymentRecovery(recovery.paymentId);
+    return data.payment;
   }, [getAccessToken]);
 
   const sendUSDC = useCallback(async (
@@ -220,7 +244,11 @@ export function useSendUSDC() {
     if (cleanNote.length > NOTE_MAX) throw new Error(`Notes must be ${NOTE_MAX} characters or fewer.`);
     if (!client?.account?.address) throw new Error("Your smart wallet is still initializing. Please wait a moment and try again.");
     if (client.chain.id !== CHAIN_ID) throw new Error("Your smart wallet is not connected to Base Sepolia.");
-    const unfinished = readPaymentRecovery();
+    if (!owner) throw new Error("Session expired. Please log in again.");
+    const stored = readPaymentRecovery();
+    // Another account's record: the server still has it and restores it when that account returns.
+    if (stored && stored.owner !== owner) clearPaymentRecovery(stored.paymentId);
+    const unfinished = stored?.owner === owner ? stored : null;
     if (unfinished) {
       throw new PaymentSendError("Resolve the earlier payment before starting another one. This prevents accidentally sending twice.", unfinished);
     }
@@ -266,6 +294,7 @@ export function useSendUSDC() {
     }
 
     let recovery: PaymentRecovery = {
+      owner,
       paymentId: intent.id,
       toUsername: username,
       amount: validAmount,
@@ -373,9 +402,9 @@ export function useSendUSDC() {
         recovery,
       );
     }
-    if (!options?.requestId) clearPaymentRecovery(intent.id);
+    clearPaymentRecovery(intent.id);
     return { txHash, paymentId: intent.id, status: "confirmed" };
-  }, [client, findOpenPayment, getAccessToken]);
+  }, [client, findOpenPayment, getAccessToken, owner]);
 
-  return { sendUSDC, retryRecord, findOpenPayment };
+  return { sendUSDC, retryRecord, findOpenPayment, cancelPayment };
 }

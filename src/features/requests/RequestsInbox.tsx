@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
-import { clearPaymentRecovery, PaymentSendError, usePaymentRecovery, useSendUSDC } from "@/features/send/sendUSDC";
+import Link from "next/link";
+import { clearPaymentRecovery, friendlySendError, PaymentSendError, usePaymentRecovery, useSendUSDC } from "@/features/send/sendUSDC";
 import { CreateRequestForm } from "./CreateRequestForm";
 import { StatusBadge, type RequestWithUsers } from "./RequestBadges";
 
@@ -53,47 +54,43 @@ export function RequestsInbox({ userId }: { userId: string }) {
   async function answer(r: RequestWithUsers, action: "pay" | "decline") {
     setBusyId(r.id);
     setActionError(null);
-    let paymentRecovery = action === "pay" && recovery?.requestId === r.id ? recovery : null;
-    let txHash: string | undefined;
+    let inFlight = action === "pay" && recovery?.requestId === r.id ? recovery : null;
     try {
       // Fail before any money moves if the session is gone.
       const token = await getAccessToken();
       if (!token) throw new Error("Session expired. Please log in again.");
       if (action === "pay") {
-        if (!paymentRecovery) {
+        // The server marks the request paid when it confirms the transfer, so there is no
+        // separate "mark paid" call that could fail after the money moved.
+        if (inFlight) {
+          if (!inFlight.txHash) throw new Error("The wallet never returned a transaction hash. Open Send to check or cancel this payment.");
+          const recorded = await retryRecord(inFlight);
+          if (recorded.status === "failed") throw new Error("The transfer failed on Base Sepolia. No USDC was sent; tap Pay to try again.");
+          if (recorded.status !== "confirmed") throw new Error("Still waiting for Base Sepolia to confirm. Tap Pay again to check the same transfer.");
+        } else {
           if (!r.requester_username) throw new Error("This requester has no username yet.");
           try {
-            const sent = await sendUSDC(r.requester_username, String(r.amount), r.note ?? undefined, { requestId: r.id });
-            txHash = sent.txHash;
-            paymentRecovery = { paymentId: sent.paymentId, txHash: sent.txHash, toUsername: r.requester_username, amount: String(r.amount), ...(r.note ? { note: r.note } : {}), requestId: r.id };
+            await sendUSDC(r.requester_username, String(r.amount), r.note ?? undefined, { requestId: r.id });
           } catch (error) {
-            if (error instanceof PaymentSendError) {
-              paymentRecovery = error.recovery;
-            }
+            if (error instanceof PaymentSendError) inFlight = error.recovery;
             throw error;
           }
         }
-        if (!paymentRecovery.txHash) {
-          throw new Error("The wallet did not return a transaction hash. Check wallet activity before trying again; no second transfer will be started.");
-        }
-        const recorded = await retryRecord(paymentRecovery);
-        if (recorded.status !== "confirmed") throw new Error("Payment confirmation is still pending. Tap Pay again to check the same transaction; it will not send again.");
-        txHash = paymentRecovery.txHash;
+        return;
       }
       const res = await fetch(`/api/requests/${r.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action, txHash }),
+        body: JSON.stringify({ action }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? "Unable to update request.");
-      if (paymentRecovery) clearPaymentRecovery(paymentRecovery.paymentId);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Unable to update request.";
-      setActionError(paymentRecovery?.requestId === r.id && paymentRecovery.txHash
-        ? `Payment sent, but it couldn't be linked to this request: ${message} Tap Pay to retry without sending again.`
-        : paymentRecovery?.txHash
-          ? `Another payment needs reconciliation before paying this request: ${message} Open Send to check it; no new transfer was started.`
+      const message = friendlySendError(e);
+      setActionError(inFlight && inFlight.requestId !== r.id
+        ? `Another payment needs attention first: ${message}`
+        : inFlight?.txHash
+          ? `${message} Tap Pay to check the same transfer; it won't send again.`
           : message);
     } finally {
       setBusyId(null);
@@ -149,7 +146,9 @@ export function RequestsInbox({ userId }: { userId: string }) {
                   </div>
                 )}
                 {tab === "incoming" && r.status === "pending" && hasPaymentInFlight && (
-                  <p role="status" className="mt-2 text-xs text-amber-800">Reconcile this payment before declining the request.</p>
+                  <p role="status" className="mt-2 text-xs text-amber-800">
+                    A payment for this request is in progress. Tap Pay to check it, or <Link href="/send" className="underline">open Send</Link> to cancel it.
+                  </p>
                 )}
               </div>
             );

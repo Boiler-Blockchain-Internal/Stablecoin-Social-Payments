@@ -24,7 +24,7 @@ export function SendScreen() {
   const { ready: profileReady, user, error: profileError } = useCurrentUser();
   const address = client?.account?.address;
   const { balance, error: balanceError, refresh } = useUsdcBalance(address);
-  const { sendUSDC, retryRecord, findOpenPayment } = useSendUSDC();
+  const { sendUSDC, retryRecord, findOpenPayment, cancelPayment } = useSendUSDC();
   const [recipient, setRecipient] = useState<SelectedUser | null>(null);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
@@ -93,18 +93,33 @@ export function SendScreen() {
     try {
       const result = await retryRecord(recovery, txHash);
       if (result.status === "confirmed") {
-        if (recovery.requestId && result.request_id !== recovery.requestId) {
-          setError("The transfer is confirmed. Return to Requests to finish linking it to the request.");
-        } else {
-          clearPaymentRecovery(recovery.paymentId);
-          setSuccess({ username: recovery.toUsername, amount: recovery.amount, txHash });
-          refresh();
-        }
+        clearPaymentRecovery(recovery.paymentId);
+        setSuccess({ username: recovery.toUsername, amount: recovery.amount, txHash });
+        refresh();
       } else if (result.status === "failed") {
         clearPaymentRecovery(recovery.paymentId);
         setError("The transfer failed on Base Sepolia. No USDC was transferred.");
       } else {
         setError("The chain has not confirmed this transfer yet. Check again shortly; do not send another payment.");
+      }
+    } catch (cause) {
+      setError(friendlySendError(cause));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function cancel() {
+    if (!recovery) return;
+    setRecoveryBusy(true);
+    setError(null);
+    try {
+      const result = await cancelPayment(recovery);
+      if (result?.status === "confirmed") {
+        setSuccess({ username: recovery.toUsername, amount: recovery.amount, txHash: result.tx_hash ?? "" });
+        refresh();
+      } else if (result?.status !== "failed") {
+        setError("A matching transfer is still confirming. Check again shortly.");
       }
     } catch (cause) {
       setError(friendlySendError(cause));
@@ -177,6 +192,12 @@ export function SendScreen() {
             className="mt-4 min-h-11 w-full rounded-xl bg-amber-950 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
             {recoveryBusy ? "Checking transaction…" : recovery.txHash ? "Retry payment recording" : "Verify transaction hash"}
           </button>
+          {!recovery.txHash && (
+            <button type="button" onClick={cancel} disabled={recoveryBusy}
+              className="mt-2 min-h-11 w-full rounded-xl border border-amber-400 px-4 py-3 text-sm font-semibold text-amber-950 disabled:opacity-50">
+              I never approved it, cancel this payment
+            </button>
+          )}
         </section>
       )}
 
