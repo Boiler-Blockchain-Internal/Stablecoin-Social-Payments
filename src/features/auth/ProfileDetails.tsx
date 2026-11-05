@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSyncUser } from "./useSyncUser";
 import { UsernameOnboarding } from "./UsernameOnboarding";
+import { WalletCard } from "./WalletCard";
 
 /** Uses the existing verified sync endpoint; no browser-supplied profile ID. */
 export function ProfileDetails() {
@@ -34,7 +35,7 @@ function CurrentProfile() {
       {user && (!user.username ? <>
         <p className="text-sm text-zinc-600">Finish choosing your username to complete your profile.</p>
         <UsernameOnboarding onSaved={setUser} />
-      </> : <div className="space-y-5 rounded-2xl border border-zinc-200 bg-white p-6">
+      </> : <><div className="space-y-5 rounded-2xl border border-zinc-200 bg-white p-6">
         <dl className="space-y-4">
           <div>
             <dt className="text-sm font-medium text-zinc-500">Username</dt>
@@ -46,7 +47,7 @@ function CurrentProfile() {
           </div>}
         </dl>
         <button type="button" onClick={retry} disabled={loading} className="text-sm text-zinc-600 underline disabled:opacity-50">Refresh profile</button>
-      </div>)}
+      </div><WalletCard /></>)}
     </div>
   );
 }
