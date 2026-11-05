@@ -1,21 +1,22 @@
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
-import * as viem from "viem";
+import { test } from "node:test";
+import { getUsdcBalance as readBalance, formatUsdcBalance, BASE_SEPOLIA_USDC_ADDRESS, CHAIN_ID } from "../src/lib/chain";
 
 let chainId=1;
 let decimals=6;
 let units=BigInt("12500000");
 let rpcFailure=false;
 const calls: {functionName:string;address?:string;args?:unknown[]}[]=[];
-mock.module("viem",{namedExports:{...viem,createPublicClient:()=>({
+// A fake RPC client passed in directly, so no network call can happen whatever the Node version.
+const fakeClient={
   getChainId:async()=>chainId,
   readContract:async(input:{functionName:string;address:string;args?:unknown[]})=>{
     calls.push(input);
     if(rpcFailure)throw new Error("RPC unavailable");
     return input.functionName==='decimals'?decimals:units;
   },
-})}});
-const { getUsdcBalance,formatUsdcBalance,BASE_SEPOLIA_USDC_ADDRESS,CHAIN_ID }=await import('../src/lib/chain');
+} as unknown as Parameters<typeof readBalance>[1];
+const getUsdcBalance=(address:`0x${string}`)=>readBalance(address,fakeClient);
 const wallet='0x1111111111111111111111111111111111111111';
 test('rejects other networks and invalid decimals; configuration retries after failure',async()=>{
   assert.equal(CHAIN_ID,84532);
