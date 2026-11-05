@@ -13,6 +13,8 @@ export function HistoryFeed({ userId }: { userId: string }) {
   const { getAccessToken } = usePrivy();
   const [data, setData] = useState<ActivityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Kept apart from load errors so the reload after a check doesn't wipe it.
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
   const [filter, setFilter] = useState<ActivityFilter>("all");
@@ -58,9 +60,9 @@ export function HistoryFeed({ userId }: { userId: string }) {
         });
         if (!response.ok) throw new Error("Unable to check one or more transfers.");
       }));
-      if (!quiet) setError(results.some((r) => r.status === "rejected") ? "Some transfers couldn't be checked yet." : null);
+      if (!quiet) setCheckError(results.some((r) => r.status === "rejected") ? "Some transfers couldn't be checked yet." : null);
     } catch (e) {
-      if (!quiet) setError(e instanceof Error ? e.message : "Unable to check pending transfers.");
+      if (!quiet) setCheckError(e instanceof Error ? e.message : "Unable to check pending transfers.");
     } finally {
       reload();
     }
@@ -86,7 +88,7 @@ export function HistoryFeed({ userId }: { userId: string }) {
         </div>
       </div>
       <HistoryFilters filter={filter} onFilter={setFilter} person={person} onPerson={setPerson} group={group} onGroup={setGroup} people={data?.people ?? []} groups={data?.groups ?? []} />
-      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      {(error ?? checkError) && <p role="alert" className="text-sm text-red-700">{error ?? checkError}</p>}
       {loading && !data ? <p role="status" className="text-sm text-zinc-500">Loading activity…</p> :
         <Card className="p-4">
           {items.length ? items.map((item) => <ActivityRow key={`${item.kind}-${item.id}`} item={item} userId={userId} />) :
