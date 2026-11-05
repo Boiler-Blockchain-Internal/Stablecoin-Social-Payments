@@ -34,6 +34,7 @@ let failUpdateInto: string | null = null;
 let nextId = 0;
 let mockedChainId = 84532;
 let chainLogs: { args: { value: bigint }; transactionHash: Hash }[] = [];
+let logQueries: { fromBlock: bigint; toBlock: bigint }[] = [];
 
 mock.module("../src/lib/privy.ts", { namedExports: {
   UnauthorizedError,
@@ -110,7 +111,7 @@ mock.module("../src/lib/chain.ts", { namedExports: {
       return receipt;
     },
     getBlockNumber: async () => BigInt(1_000_000),
-    getLogs: async () => chainLogs,
+    getLogs: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => { logQueries.push({ fromBlock, toBlock }); return chainLogs; },
     getBlock: async () => ({ timestamp: BigInt(Math.floor(Date.parse("2026-11-04T00:00:01.000Z") / 1000)) }),
     getTransaction: async ({ hash }: { hash: Hash }) => {
       const transaction = transactions.get(hash);
@@ -184,6 +185,7 @@ beforeEach(() => {
   nextId = 0;
   mockedChainId = 84532;
   chainLogs = [];
+  logQueries = [];
   receipts = new Map();
   transactions = new Map();
   tables = {
@@ -405,6 +407,17 @@ test("an earlier, already-recorded transfer of the same amount doesn't block can
   const response = await byId(record, payment.id, { action: "cancel", immediate: true });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).payment.status, "failed");
+});
+
+test("the cancel scan stays within the RPC's 200-block log limit and an hour after the intent", async () => {
+  const { payment } = await preparedPayment();
+  assert.equal((await byId(record, payment.id, { action: "cancel", immediate: true })).status, 200);
+  assert.ok(logQueries.length > 0 && logQueries.length <= 10);
+  for (const { fromBlock, toBlock } of logQueries) {
+    assert.ok(toBlock >= fromBlock && toBlock - fromBlock < BigInt(200));
+    assert.ok(toBlock <= BigInt(1_000_000));
+  }
+  assert.ok(logQueries.at(-1)!.toBlock - logQueries[0].fromBlock <= BigInt(1_800));
 });
 
 test("a manual cancel waits a few minutes in case the transfer is still landing", async () => {
