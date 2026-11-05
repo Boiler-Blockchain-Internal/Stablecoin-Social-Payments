@@ -3,11 +3,12 @@
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWalletAddress } from "./useSmartWalletAddress";
 import { useUsdcBalance } from "./useUsdcBalance";
+import { UsdcFaucet } from "./UsdcFaucet";
 
 export function WalletCard() {
   const { ready, authenticated } = usePrivy();
   const address = useSmartWalletAddress();
-  const { balance, error: balanceError, refresh } = useUsdcBalance(address);
+  const { balance, error: balanceError, loading, refresh } = useUsdcBalance(address);
 
   if (!ready) return null;
 
@@ -24,24 +25,25 @@ export function WalletCard() {
       <div>
         <h2 className="text-sm font-medium text-zinc-500">Smart wallet</h2>
         <p className="break-all font-mono text-sm" data-testid="smart-wallet-address">
-          {address ?? "Creating smart wallet…"}
+          {address ?? "Your smart wallet is not available yet. Please wait while Privy links it to your account."}
         </p>
       </div>
       <div>
         <h2 className="text-sm font-medium text-zinc-500">USDC balance (Base Sepolia)</h2>
-        <p className="text-3xl font-semibold" data-testid="usdc-balance">
-          {balanceError ? "—" : balance === null ? "…" : `$${balance}`}
+        <p className="break-all text-3xl font-semibold" data-testid="usdc-balance" aria-live="polite">
+          {!address ? "Wallet not ready" : balanceError ? "Balance unavailable" : loading ? "Loading balance…" : balance === null ? "—" : `${balance} USDC`}
         </p>
-        {balanceError && <p className="text-sm text-red-600">{balanceError}</p>}
+        {balanceError && <p role="alert" className="text-sm text-red-600">{balanceError}</p>}
         <button
           type="button"
           onClick={refresh}
-          disabled={!address}
+          disabled={!address || loading}
           className="mt-2 text-sm text-zinc-600 underline disabled:opacity-50"
         >
-          Refresh
+          {loading ? "Refreshing…" : "Refresh"}
         </button>
       </div>
+      <UsdcFaucet address={address} />
     </section>
   );
 }
