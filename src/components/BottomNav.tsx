@@ -15,27 +15,27 @@ const tabs = [
 export function BottomNav() {
   const pathname = usePathname();
   const { pending, notice, dismiss } = useIncomingRequests();
-  return (
-    <>
-      {notice && pathname !== "/requests" && (
-        <div role="status" className="sticky bottom-20 z-50 mx-auto w-full max-w-xl px-4">
-          <div className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900 px-4 py-3 text-sm text-white shadow-lg">
-            <Link href="/requests" onClick={dismiss} className="min-w-0 flex-1">
-              <span className="font-semibold">@{notice.username ?? "someone"}</span> requested {notice.amount} USDC
-              <span className="ml-1 underline">View</span>
-            </Link>
-            <button type="button" onClick={dismiss} aria-label="Dismiss" className="shrink-0 px-1 text-zinc-400">✕</button>
-          </div>
-        </div>
-      )}
-      <BottomNavLinks pathname={pathname} badges={{ "/requests": pending }} />
-    </>
-  );
+  const toast = notice && pathname !== "/requests" ? (
+    <div className="flex items-center justify-between gap-2 rounded-xl bg-zinc-900 py-1 pl-4 pr-1 text-sm text-white shadow-lg">
+      <Link href="/requests" onClick={dismiss} className="min-w-0 flex-1 py-2">
+        <span className="font-semibold">@{notice.username ?? "someone"}</span> requested {notice.amount} USDC
+        <span className="ml-1 underline">View</span>
+      </Link>
+      <button type="button" onClick={dismiss} aria-label="Dismiss" className="min-h-11 min-w-11 shrink-0 text-zinc-400">✕</button>
+    </div>
+  ) : null;
+  return <BottomNavLinks pathname={pathname} badges={{ "/requests": pending }} toast={toast} />;
 }
 
-export function BottomNavLinks({ pathname, badges = {} }: { pathname: string | null; badges?: Record<string, number> }) {
+export function BottomNavLinks({ pathname, badges = {}, toast = null }: {
+  pathname: string | null;
+  badges?: Record<string, number>;
+  toast?: React.ReactNode;
+}) {
   return (
     <nav aria-label="Main navigation" className="sticky bottom-0 z-40 border-t border-zinc-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
+      {/* Always mounted so screen readers announce the notice; floats just above the nav. */}
+      <div role="status" className="absolute inset-x-0 bottom-full mx-auto mb-2 w-full max-w-xl px-4">{toast}</div>
       <div className="mx-auto flex max-w-xl justify-around">
         {tabs.map(({ href, label, symbol }) => {
           const active = pathname !== null && (pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)));
