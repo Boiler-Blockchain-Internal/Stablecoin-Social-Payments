@@ -3,6 +3,7 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import { SmartWalletsProvider } from "@privy-io/react-auth/smart-wallets";
 import { chain } from "@/lib/chain";
+import { AuthProfileBoundary } from "@/features/auth/AuthProfileBoundary";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -17,7 +18,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         supportedChains: [chain],
       }}
     >
-      <SmartWalletsProvider>{children}</SmartWalletsProvider>
+      <SmartWalletsProvider><AuthProfileBoundary>{children}</AuthProfileBoundary></SmartWalletsProvider>
     </PrivyProvider>
   );
 }
