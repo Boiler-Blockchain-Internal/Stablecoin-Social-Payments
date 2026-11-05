@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { requirePrivyUser } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
 import { errorResponse, getCallerUser } from "@/features/requests/server";
@@ -7,6 +8,8 @@ const TX_COLUMNS = "id, from_user, to_user, amount, note, status, tx_hash, reque
 const REQUEST_COLUMNS = "id, requester_id, payer_id, amount, note, status, split_id, created_at";
 
 export async function GET(request: Request) {
+  // Per-user data: opt out of prerendering before the try, so Next's bail-out isn't caught below.
+  await connection();
   try {
     const caller = await getCallerUser(await requirePrivyUser(request));
     const db = getSupabaseAdmin();

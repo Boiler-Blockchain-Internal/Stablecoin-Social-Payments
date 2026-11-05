@@ -25,13 +25,13 @@ export function ActivityRow({ item, userId }: { item: ActivityItem; userId: stri
         <p className="text-sm font-semibold">{label}</p>
         {item.note && <p className="break-words text-xs text-zinc-600">{item.note}</p>}
         <p className="text-xs text-zinc-500">
-          {item.kind === "request" ? `Request ${item.status}` : `Transfer ${item.status}`}
+          {item.kind === "request" ? `Request ${item.status}` : item.status === "pending" && !item.txHash ? "Transfer processing" : `Transfer ${item.status}`}
           {Number.isNaN(date.getTime()) ? "" : ` · ${date.toLocaleString()}`}
         </p>
         {item.kind === "request" && item.status === "pending" &&
           <Link className="text-xs font-medium text-blue-700 underline" href="/requests">View request</Link>}
       </div>
-      <p className="shrink-0 text-right text-sm font-semibold tabular-nums">
+      <p className={`shrink-0 text-right text-sm font-semibold tabular-nums ${item.kind === "transaction" && item.status === "failed" ? "text-zinc-400 line-through" : ""}`}>
         {item.kind === "request" ? "" : sent ? "−" : "+"}{readableAmount}
         <span className="block text-xs font-normal text-zinc-500">USDC</span>
       </p>

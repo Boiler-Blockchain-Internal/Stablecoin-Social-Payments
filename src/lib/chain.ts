@@ -42,25 +42,30 @@ export function formatUsdcBalance(units: bigint): string {
   return `${whole}.${fraction.padEnd(2, "0")}`;
 }
 
-let verifiedConfiguration: Promise<void> | null = null;
-function verifyUsdcConfiguration(): Promise<void> {
-  if (!verifiedConfiguration) {
-    verifiedConfiguration = (async () => {
+/** The read calls the balance check needs; tests pass a fake instead of mocking viem. */
+type UsdcReader = Pick<typeof publicClient, "getChainId" | "readContract">;
+
+const verifiedConfiguration = new WeakMap<UsdcReader, Promise<void>>();
+function verifyUsdcConfiguration(client: UsdcReader): Promise<void> {
+  let check = verifiedConfiguration.get(client);
+  if (!check) {
+    check = (async () => {
       if (USDC_ADDRESS.toLowerCase() !== BASE_SEPOLIA_USDC_ADDRESS.toLowerCase()) throw new Error("Expected Circle USDC on Base Sepolia.");
       const [chainId, decimals] = await Promise.all([
-        publicClient.getChainId(),
-        publicClient.readContract({ address: USDC_ADDRESS, abi: erc20Abi, functionName: "decimals" }),
+        client.getChainId(),
+        client.readContract({ address: USDC_ADDRESS, abi: erc20Abi, functionName: "decimals" }),
       ]);
       if (chainId !== CHAIN_ID || decimals !== USDC_DECIMALS) throw new Error("Unexpected USDC network or decimals.");
-    })().catch((error) => { verifiedConfiguration = null; throw error; });
+    })().catch((error) => { verifiedConfiguration.delete(client); throw error; });
+    verifiedConfiguration.set(client, check);
   }
-  return verifiedConfiguration;
+  return check;
 }
 
-export async function getUsdcBalance(address: Address): Promise<bigint> {
+export async function getUsdcBalance(address: Address, client: UsdcReader = publicClient): Promise<bigint> {
   // Validate once per successful client session; retry validation after failures.
-  await verifyUsdcConfiguration();
-  return publicClient.readContract({
+  await verifyUsdcConfiguration(client);
+  return client.readContract({
     address: USDC_ADDRESS,
     abi: erc20Abi,
     functionName: "balanceOf",
