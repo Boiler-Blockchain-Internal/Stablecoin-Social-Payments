@@ -3,6 +3,7 @@
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWalletAddress } from "./useSmartWalletAddress";
 import { useUsdcBalance } from "./useUsdcBalance";
+import { UsdcFaucet } from "./UsdcFaucet";
 
 export function WalletCard() {
   const { ready, authenticated } = usePrivy();
@@ -42,6 +43,7 @@ export function WalletCard() {
           {loading ? "Refreshing…" : "Refresh"}
         </button>
       </div>
+      <UsdcFaucet address={address} />
     </section>
   );
 }
