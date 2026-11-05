@@ -12,6 +12,7 @@ const B = "10000000-0000-4000-8000-00000000000b";
 const C = "10000000-0000-4000-8000-00000000000c";
 const N = "10000000-0000-4000-8000-00000000000d";
 const HASH = `0x${"ab".repeat(32)}`;
+const LATER = "2026-11-04T00:05:00.000Z";
 const OTHER_HASH = `0x${"cd".repeat(32)}`;
 const SPLIT = "20000000-0000-4000-8000-000000000001";
 
@@ -36,7 +37,7 @@ mock.module("../src/lib/supabase-server.ts", { namedExports: {
         if (table === "transactions" && tables.transactions.some((row) => row.tx_hash === payload.tx_hash)) {
           return { data: null, error: { message: "duplicate key", code: "23505" } };
         }
-        const row = { id: `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`, created_at: "now", ...payload };
+        const row = { id: `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`, created_at: "2026-11-04T00:00:00.000Z", ...payload };
         tables[table].push(row);
         return { data: [row], error: null };
       }
@@ -150,7 +151,7 @@ test("lists incoming and outgoing requests with usernames", async () => {
 
 test("paying marks the request paid and records a linked transaction", async () => {
   const id = await aliceAsksBob();
-  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed", created_at: LATER });
   const response = await answer(id, { action: "pay", txHash: HASH });
   assert.equal(response.status, 200);
   assert.equal(tables.requests[0].status, "paid");
@@ -161,7 +162,7 @@ test("paying marks the request paid and records a linked transaction", async () 
 
 test("paying links a verified transaction the send already recorded", async () => {
   const id = await aliceAsksBob();
-  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed", created_at: LATER });
   assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 200);
   assert.equal(tables.transactions.length, 1);
   assert.equal(tables.transactions[0].request_id, id);
@@ -171,7 +172,7 @@ test("an arbitrary or unverified hash cannot settle a request", async () => {
   const id = await aliceAsksBob();
   assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
   assert.equal(tables.requests[0].status, "pending");
-  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "pending" });
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "pending", created_at: LATER });
   assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
   assert.equal(tables.requests[0].status, "pending");
 });
@@ -185,10 +186,17 @@ test("a mismatched transaction is refused and the request stays pending", async 
     { from_user: B, to_user: A, amount: 5, request_id: null, status: "pending" },
     { from_user: B, to_user: A, amount: 5, request_id: "another-request", status: "confirmed" },
   ]) {
-    tables.transactions = [{ id: "tx-1", tx_hash: HASH, ...tx }];
+    tables.transactions = [{ id: "tx-1", tx_hash: HASH, created_at: LATER, ...tx }];
     assert.equal((await answer(id, { action: "pay", txHash: HASH.toUpperCase().replace("0X", "0x") })).status, 409, JSON.stringify(tx));
     assert.equal(tables.requests[0].status, "pending");
   }
+});
+
+test("a transfer made before the request existed can't settle it", async () => {
+  const id = await aliceAsksBob();
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed", created_at: "2026-11-03T00:00:00.000Z" });
+  assert.equal((await answer(id, { action: "pay", txHash: HASH })).status, 409);
+  assert.equal(tables.requests[0].status, "pending");
 });
 
 test("requests can join a split only from inside its group", async () => {
@@ -201,7 +209,7 @@ test("requests can join a split only from inside its group", async () => {
 
 test("a failed request-to-transaction link rolls the request back to pending", async () => {
   const id = await aliceAsksBob();
-  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed" });
+  tables.transactions.push({ id: "tx-1", from_user: B, to_user: A, amount: "5", tx_hash: HASH, request_id: null, status: "confirmed", created_at: LATER });
   failUpdateInto = "transactions";
   const response = await answer(id, { action: "pay", txHash: HASH });
   assert.equal(response.status, 500);

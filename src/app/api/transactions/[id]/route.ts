@@ -19,7 +19,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const { id } = await params;
     const body = await readSendBody(request);
     if (body.action === "cancel") {
-      const result = await cancelUnsubmittedPayment(privyId, id);
+      // `immediate` is for the wallet's own definite rejections; a manual cancel waits a few minutes.
+      const result = await cancelUnsubmittedPayment(privyId, id, body.immediate === true);
       return Response.json(result);
     }
     const result = await recordPaymentHash(privyId, id, body.txHash);

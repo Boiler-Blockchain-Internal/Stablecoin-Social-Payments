@@ -232,7 +232,7 @@ const CLOCK_SKEW_SECONDS = 120;
  * A confirmed payment made for a request settles that request in the same step, so the request
  * can never stay payable after its money moved (and the browser never has to finish the job).
  */
-async function settleLinkedRequest(payment: Pick<PaymentIntent, "from_user" | "to_user" | "request_id">) {
+export async function settleLinkedRequest(payment: Pick<PaymentIntent, "from_user" | "to_user" | "request_id">) {
   if (!payment.request_id) return;
   const { error } = await getSupabaseAdmin().from("requests").update({ status: "paid" })
     .eq("id", payment.request_id).eq("status", "pending")
@@ -335,11 +335,16 @@ export async function recordPaymentHash(privyId: string, paymentId: string, rawH
 }
 
 const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
-// Base Sepolia makes a block every ~2s; public RPCs cap log queries at about 10k blocks (~5.5h).
-const MAX_LOG_BLOCKS = BigInt(9_000);
+// The public Base Sepolia RPC caps eth_getLogs at 200 blocks; blocks are ~2s apart.
+const LOG_CHUNK_BLOCKS = BigInt(200);
+const BLOCK_SECONDS = 2;
+// A wallet prompt that hasn't landed within an hour of the intent never will (bundlers drop it).
+const LANDING_WINDOW_BLOCKS = BigInt(1_800);
+// A manual cancel must wait this long, so a transfer still in the bundler's mempool can land first.
+const MANUAL_CANCEL_DELAY_MS = 5 * 60_000;
 
-/** A USDC transfer matching the intent that landed after it was created, if any. */
-async function findMatchingTransfer(payment: PaymentIntent): Promise<Hash | null> {
+/** Unrecorded USDC transfers matching the intent, from just before it to an hour after, oldest first. */
+async function findCandidateTransfers(payment: PaymentIntent): Promise<Hash[]> {
   const db = getSupabaseAdmin();
   const [sender, recipient] = await Promise.all([
     db.from("users").select("wallet_address").eq("id", payment.from_user).maybeSingle(),
@@ -348,26 +353,47 @@ async function findMatchingTransfer(payment: PaymentIntent): Promise<Hash | null
   if (sender.error || recipient.error) throw sender.error ?? recipient.error;
   const from = sender.data?.wallet_address;
   const to = recipient.data?.wallet_address;
-  if (!from || !to || !isAddress(from) || !isAddress(to)) return null;
+  if (!from || !to || !isAddress(from) || !isAddress(to)) {
+    throw new SendApiError("A wallet address is missing, so this payment can't be checked on-chain. Paste its transaction hash instead.", 409);
+  }
   const latest = await publicClient.getBlockNumber();
-  const ageBlocks = BigInt(Math.ceil((Date.now() - new Date(payment.created_at).getTime()) / 2000) + CLOCK_SKEW_SECONDS);
-  const span = ageBlocks < MAX_LOG_BLOCKS ? ageBlocks : MAX_LOG_BLOCKS;
-  const logs = await publicClient.getLogs({
-    address: USDC_ADDRESS, event: transferEvent, args: { from: from as Address, to: to as Address },
-    fromBlock: latest > span ? latest - span : BigInt(0), toBlock: latest,
-  });
+  const ageSeconds = Math.max(0, (Date.now() - new Date(payment.created_at).getTime()) / 1000);
+  const ageBlocks = BigInt(Math.ceil((ageSeconds + CLOCK_SKEW_SECONDS) / BLOCK_SECONDS));
+  const start = latest > ageBlocks ? latest - ageBlocks : BigInt(0);
+  const stop = start + LANDING_WINDOW_BLOCKS < latest ? start + LANDING_WINDOW_BLOCKS : latest;
   const expected = toUsdcUnits(String(payment.amount));
-  const match = logs.find((log) => log.args.value === expected);
-  return match?.transactionHash ?? null;
+  const hashes: Hash[] = [];
+  for (let fromBlock = start; fromBlock <= stop; fromBlock += LOG_CHUNK_BLOCKS) {
+    const toBlock = fromBlock + LOG_CHUNK_BLOCKS - BigInt(1) < stop ? fromBlock + LOG_CHUNK_BLOCKS - BigInt(1) : stop;
+    const logs = await publicClient.getLogs({ address: USDC_ADDRESS, event: transferEvent, args: { from: from as Address, to: to as Address }, fromBlock, toBlock });
+    for (const log of logs) {
+      const hash = log.transactionHash?.toLowerCase() as Hash | undefined;
+      if (log.args.value === expected && hash && !hashes.includes(hash)) hashes.push(hash);
+    }
+  }
+  if (hashes.length === 0) return [];
+  // Transfers already attached to another payment (e.g. an earlier send of the same amount) aren't this one.
+  const recorded = await db.from("transactions").select("tx_hash").in("tx_hash", hashes);
+  if (recorded.error) throw recorded.error;
+  const taken = new Set((recorded.data ?? []).map((row) => String(row.tx_hash).toLowerCase()));
+  return hashes.filter((hash) => !taken.has(hash));
 }
 
-export async function cancelUnsubmittedPayment(privyId: string, paymentId: string) {
+export async function cancelUnsubmittedPayment(privyId: string, paymentId: string, immediate = false) {
   const payment = await getPaymentForCaller(privyId, paymentId);
   if (payment.status !== "pending" || payment.tx_hash) throw new SendApiError("This payment can no longer be cancelled as unsubmitted.", 409);
+  if (!immediate && Date.now() - new Date(payment.created_at).getTime() < MANUAL_CANCEL_DELAY_MS) {
+    throw new SendApiError("This payment may still be landing. Wait a few minutes, then try cancelling again.", 409);
+  }
   // If the wallet did send, record that transfer instead of cancelling and allowing a second one.
-  const landed = await findMatchingTransfer(payment);
-  if (landed) {
-    const recorded = await recordPaymentHash(privyId, paymentId, landed);
+  for (const hash of await findCandidateTransfers(payment)) {
+    let recorded;
+    try {
+      recorded = await recordPaymentHash(privyId, paymentId, hash);
+    } catch (error) {
+      if (error instanceof SendApiError && error.status === 409) continue; // Predates the intent, or not ours.
+      throw error;
+    }
     if (recorded.payment.status !== "pending") return recorded;
     throw new SendApiError("A matching transfer was found on-chain and is still confirming. Check again shortly.", 409);
   }

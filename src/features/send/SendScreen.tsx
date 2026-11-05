@@ -35,6 +35,7 @@ export function SendScreen() {
   const recovery = usePaymentRecovery();
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [manualRecoveryHash, setManualRecoveryHash] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authenticated || recovery) return;
@@ -113,12 +114,15 @@ export function SendScreen() {
     if (!recovery) return;
     setRecoveryBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const result = await cancelPayment(recovery);
       if (result?.status === "confirmed") {
         setSuccess({ username: recovery.toUsername, amount: recovery.amount, txHash: result.tx_hash ?? "" });
         refresh();
-      } else if (result?.status !== "failed") {
+      } else if (result?.status === "failed") {
+        setNotice("Payment cancelled. Nothing was sent.");
+      } else {
         setError("A matching transfer is still confirming. Check again shortly.");
       }
     } catch (cause) {
@@ -174,6 +178,7 @@ export function SendScreen() {
         {address ? <p className="mt-3 break-all font-mono text-[11px] text-emerald-200/80">Smart wallet · {address}</p> : <p role="status" className="mt-3 text-xs text-emerald-200">Initializing your smart wallet…</p>}
       </section>
 
+      {notice && <p role="status" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p>}
       {recovery && (
         <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 sm:p-5">
           <p className="text-sm font-semibold text-amber-950">A payment needs attention</p>

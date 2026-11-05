@@ -307,7 +307,7 @@ export function useSendUSDC() {
       // This happens before the wallet is called, so close the unused reservation.
       let cancelled = false;
       try {
-        const result = await apiJson<PaymentResult & ApiError>(`/api/transactions/${intent.id}`, token, { action: "cancel" });
+        const result = await apiJson<PaymentResult & ApiError>(`/api/transactions/${intent.id}`, token, { action: "cancel", immediate: true });
         cancelled = result.response.ok;
       } catch { /* A failed cancellation must leave the sender locked rather than risk a duplicate. */ }
       if (cancelled) throw new Error("Payment recovery storage is unavailable. The wallet was not asked to send; enable browser storage and try again.");
@@ -336,7 +336,7 @@ export function useSendUSDC() {
       if (isDefinitePreSubmissionFailure(error)) {
         let cancelled = false;
         try {
-          const result = await apiJson<PaymentResult & ApiError>(`/api/transactions/${intent.id}`, token, { action: "cancel" });
+          const result = await apiJson<PaymentResult & ApiError>(`/api/transactions/${intent.id}`, token, { action: "cancel", immediate: true });
           cancelled = result.response.ok;
         } catch {
           // Preserve the intent locally if its failed state could not be saved.

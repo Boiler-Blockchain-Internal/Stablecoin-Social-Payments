@@ -390,16 +390,35 @@ test("cancelling records a matching on-chain transfer instead of allowing a seco
   const { payment } = await preparedPayment();
   receipts.set(HASH, successReceipt());
   chainLogs = [{ args: { value: BigInt(999) }, transactionHash: OTHER_HASH }, { args: { value: BigInt(1_250_000) }, transactionHash: HASH }];
-  const response = await byId(record, payment.id, { action: "cancel" });
+  const response = await byId(record, payment.id, { action: "cancel", immediate: true });
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.payment.status, "confirmed");
   assert.equal(body.payment.tx_hash, HASH);
 });
 
+test("an earlier, already-recorded transfer of the same amount doesn't block cancelling", async () => {
+  tables.transactions.push({ id: "tx-old", from_user: A, to_user: B, amount: "1.25", note: null, tx_hash: OTHER_HASH,
+    status: "confirmed", request_id: null, client_reference: null, created_at: "2026-11-03T23:58:00.000Z" });
+  const { payment } = await preparedPayment();
+  chainLogs = [{ args: { value: BigInt(1_250_000) }, transactionHash: OTHER_HASH }];
+  const response = await byId(record, payment.id, { action: "cancel", immediate: true });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).payment.status, "failed");
+});
+
+test("a manual cancel waits a few minutes in case the transfer is still landing", async () => {
+  const { payment } = await preparedPayment();
+  const row = tables.transactions.find((t) => t.id === payment.id)!;
+  row.created_at = new Date().toISOString();
+  assert.equal((await byId(record, payment.id, { action: "cancel" })).status, 409);
+  row.created_at = new Date(Date.now() - 10 * 60_000).toISOString();
+  assert.equal((await byId(record, payment.id, { action: "cancel" })).status, 200);
+});
+
 test("unsubmitted intents can be cancelled after a rejected wallet prompt", async () => {
   const { payment } = await preparedPayment();
-  const response = await byId(record, payment.id, { action: "cancel" });
+  const response = await byId(record, payment.id, { action: "cancel", immediate: true });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).payment.status, "failed");
   assert.equal((await byId(record, payment.id, { txHash: HASH })).status, 200);
