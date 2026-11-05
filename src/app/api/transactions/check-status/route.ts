@@ -2,6 +2,7 @@ import { decodeEventLog, erc20Abi, isHash, type Address, type Hex } from "viem";
 import { publicClient, USDC_ADDRESS, toUsdcUnits } from "@/lib/chain";
 import { requirePrivyUser } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
+import { settleLinkedRequest } from "@/features/send/server";
 import { RequestError, errorResponse, getCallerUser, readJsonObject } from "@/features/requests/server";
 import { isUuid } from "@/features/requests/validation";
 
@@ -58,14 +59,18 @@ export async function POST(request: Request) {
     }
     const db = getSupabaseAdmin();
     const lookup = await db.from("transactions")
-      .select("id, from_user, to_user, amount, tx_hash, status")
+      .select("id, from_user, to_user, amount, tx_hash, status, request_id")
       .eq("id", body.transactionId).maybeSingle();
     if (lookup.error) throw lookup.error;
     const tx = lookup.data;
     if (!tx || (tx.from_user !== caller.id && tx.to_user !== caller.id)) {
       throw new RequestError("Transaction not found.", 404);
     }
-    if (tx.status !== "pending") return Response.json({ status: tx.status });
+    if (tx.status !== "pending") {
+      // Heal a request a failed settle left pending after its payment confirmed.
+      if (tx.status === "confirmed") await settleLinkedRequest(tx);
+      return Response.json({ status: tx.status });
+    }
     if (!tx.tx_hash || !isHash(tx.tx_hash)) {
       throw new RequestError("This payment does not have a valid transaction hash.", 409);
     }
@@ -96,6 +101,7 @@ export async function POST(request: Request) {
     const updated = await db.from("transactions").update({ status: next })
       .eq("id", tx.id).eq("status", "pending").select("status").maybeSingle();
     if (updated.error) throw updated.error;
+    if (next === "confirmed" && updated.data?.status === "confirmed") await settleLinkedRequest(tx);
     return Response.json({ status: updated.data?.status ?? next });
   } catch (e) {
     return errorResponse(e, "Unable to verify transfer.");

@@ -2,14 +2,15 @@ import { requirePrivyUser } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
 import { RequestError, errorResponse, getCallerUser, readJsonObject } from "@/features/requests/server";
 import { isTxHash, isUuid } from "@/features/requests/validation";
+import { toUsdcUnits } from "@/lib/chain";
 
-type RequestRow = { id: string; requester_id: string; payer_id: string; amount: string; note: string | null; status: string };
+type RequestRow = { id: string; requester_id: string; payer_id: string; amount: string; note: string | null; status: string; created_at: string };
 
 /**
  * The payer answers a pending request.
  * - { action: "decline" }
  * - { action: "pay", txHash }: call after sendUSDC() succeeds. Marks the request paid and links the
- *   payment: an existing `transactions` row with that hash gets `request_id`, otherwise one is recorded.
+ *   payment: only a previously recorded, chain-verified transaction can be linked to the request.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -23,12 +24,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const txHash = action === "pay" ? (body.txHash as string).toLowerCase() : null;
 
     const db = getSupabaseAdmin();
-    const found = await db.from("requests").select("id, requester_id, payer_id, amount, note, status").eq("id", id).maybeSingle();
+    const found = await db.from("requests").select("id, requester_id, payer_id, amount, note, status, created_at").eq("id", id).maybeSingle();
     if (found.error) throw found.error;
     const row = found.data as RequestRow | null;
     if (!row) throw new RequestError("Request not found.", 404);
     if (row.payer_id !== caller.id) throw new RequestError("Only the person asked to pay can answer this request.", 403);
+    if (action === "pay" && row.status === "paid") {
+      // Confirming the payment already settled the request; repeating the call is harmless.
+      const settled = await db.from("transactions").select("id").eq("request_id", row.id)
+        .eq("tx_hash", txHash as string).eq("status", "confirmed").maybeSingle();
+      if (settled.error) throw settled.error;
+      if (settled.data) return Response.json({ status: "paid" });
+    }
     if (row.status !== "pending") throw new RequestError("This request was already answered.", 409);
+    if (action === "decline") {
+      const inFlight = await db.from("transactions").select("id").eq("request_id", row.id)
+        .in("status", ["pending", "confirmed"]).maybeSingle();
+      if (inFlight.error) throw inFlight.error;
+      if (inFlight.data) throw new RequestError("A payment is being processed for this request. Reconcile it before declining.", 409);
+    }
 
     // Only a still-pending row changes, so a double click or a pay/decline race can't both win.
     const claimed = await db.from("requests").update({ status: action === "pay" ? "paid" : "declined" })
@@ -40,7 +54,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       try {
         await linkPayment(row, txHash as string);
       } catch (e) {
-        const rollback = await db.from("requests").update({ status: "pending" }).eq("id", id);
+        const rollback = await db.from("requests").update({ status: "pending" }).eq("id", id).eq("status", "paid");
         if (rollback.error) console.error(`Request ${id} is paid with no linked transaction:`, rollback.error);
         throw e;
       }
@@ -51,33 +65,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 }
 
-async function linkPayment(row: RequestRow, txHash: string, retried = false): Promise<void> {
+async function linkPayment(row: RequestRow, txHash: string): Promise<void> {
   const db = getSupabaseAdmin();
-  const existing = await db.from("transactions").select("id, from_user, to_user, amount, status, request_id").eq("tx_hash", txHash).maybeSingle();
+  const existing = await db.from("transactions").select("id, from_user, to_user, amount, status, request_id, created_at").eq("tx_hash", txHash).maybeSingle();
   if (existing.error) throw existing.error;
-  if (existing.data) {
-    const tx = existing.data;
-    if (tx.from_user !== row.payer_id || tx.to_user !== row.requester_id || Number(tx.amount) !== Number(row.amount)
-      || tx.status === "failed" || tx.request_id) {
-      throw new RequestError("That transaction doesn't match this request.", 409);
-    }
-    // Only an unlinked row, so one transfer can't settle two requests.
-    const linked = await db.from("transactions").update({ request_id: row.id })
-      .eq("id", tx.id).is("request_id", null).select("id").maybeSingle();
-    if (linked.error) throw linked.error;
-    if (!linked.data) throw new RequestError("That transaction already settled another request.", 409);
-    return;
+  if (!existing.data) throw new RequestError("That transaction has not been verified and recorded yet.", 409);
+  const tx = existing.data;
+  let amountMatches = false;
+  try { amountMatches = toUsdcUnits(String(tx.amount)) === toUsdcUnits(String(row.amount)); } catch { /* Invalid stored amount. */ }
+  // A payment made before the request existed can't be for it.
+  const afterRequest = new Date(tx.created_at).getTime() >= new Date(row.created_at).getTime();
+  if (tx.from_user !== row.payer_id || tx.to_user !== row.requester_id || !amountMatches || !afterRequest || tx.status !== "confirmed" ||
+    (tx.request_id && tx.request_id !== row.id)) {
+    throw new RequestError("That transaction doesn't match this request.", 409);
   }
-  const { error } = await db.from("transactions").insert({
-    from_user: row.payer_id,
-    to_user: row.requester_id,
-    amount: row.amount,
-    note: row.note,
-    tx_hash: txHash,
-    status: "pending",
-    request_id: row.id,
-  });
-  // The send recorded the same hash meanwhile: link that row instead.
-  if (error?.code === "23505" && !retried) return linkPayment(row, txHash, true);
-  if (error) throw error;
+  if (tx.request_id === row.id) return;
+  // Only an unlinked, verified payment can settle this request.
+  const linked = await db.from("transactions").update({ request_id: row.id })
+    .eq("id", tx.id).is("request_id", null).eq("status", "confirmed").select("id").maybeSingle();
+  // The one-payment-per-request index: another live payment already settles this request.
+  if (linked.error?.code === "23505") throw new RequestError("Another payment is already linked to this request.", 409);
+  if (linked.error) throw linked.error;
+  if (!linked.data) throw new RequestError("That transaction already settled another request.", 409);
 }

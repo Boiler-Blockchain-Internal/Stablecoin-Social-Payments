@@ -1,6 +1,6 @@
 # StablePay
 
-A Venmo-style app for sending and requesting USDC with friends. Users log in with email or Google (Privy), get a smart wallet with sponsored gas, and pay each other in USDC on the **Base Sepolia testnet**. Payments, requests, groups, and splits are stored in Supabase.
+A Venmo-style app for sending and requesting USDC with friends. Users log in with email or Google (Privy), get a smart wallet, and pay each other in USDC on the **Base Sepolia testnet**. Gas sponsorship depends on the app's Privy smart wallet and paymaster configuration. Payments, requests, groups, and splits are stored in Supabase.
 
 **Stack:** Next.js (App Router, TypeScript) · Tailwind · Privy (auth + smart wallets) · viem · Supabase · Base Sepolia
 
@@ -36,7 +36,7 @@ Log in with email at http://localhost:3000 and you should see your smart wallet 
 | `supabase/migrations/` | Database schema (change it with a new migration, never by hand in the dashboard) |
 
 **Rules:**
-- The user's address is always their **smart wallet** address. Send transactions through the Privy smart wallet client so gas is sponsored.
+- The user's address is always their **smart wallet** address. Send transactions through the Privy smart wallet client. Gas is sponsored only when Base Sepolia sponsorship is enabled and funded in Privy's dashboard.
 - The browser only **reads** from Supabase (anon key).
 - Every **write** goes through an API route that calls `requirePrivyUser()` and then uses `getSupabaseAdmin()`. See `src/app/api/users/sync/route.ts` for the pattern.
 

@@ -12,7 +12,8 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       config={{
         loginMethods: ["email", "google"],
         // The embedded wallet is only the *signer*. The user's address everywhere in
-        // this app is their smart wallet (gas is sponsored by the paymaster set in Privy's dashboard).
+        // this app is their smart wallet. Gas sponsorship depends on the Base Sepolia paymaster
+        // configuration and policy enabled for this app in Privy's dashboard.
         embeddedWallets: { ethereum: { createOnLogin: "all-users" } },
         defaultChain: chain,
         supportedChains: [chain],

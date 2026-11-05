@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
-import { sendUSDC } from "@/features/send/sendUSDC";
+import Link from "next/link";
+import { clearPaymentRecovery, friendlySendError, PaymentSendError, usePaymentRecovery, useSendUSDC } from "@/features/send/sendUSDC";
 import { CreateRequestForm } from "./CreateRequestForm";
 import { StatusBadge, type RequestWithUsers } from "./RequestBadges";
 
@@ -11,13 +12,13 @@ type Tab = "incoming" | "outgoing";
 
 export function RequestsInbox({ userId }: { userId: string }) {
   const { getAccessToken } = usePrivy();
+  const { sendUSDC, retryRecord } = useSendUSDC();
+  const recovery = usePaymentRecovery();
   const [tab, setTab] = useState<Tab>("incoming");
   const [loaded, setLoaded] = useState<{ tab: Tab; requests: RequestWithUsers[] } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  // Transfers that went through but weren't recorded yet; retrying reuses the hash instead of paying twice.
-  const [sentHashes, setSentHashes] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
   const reload = useCallback(() => setRefresh((n) => n + 1), []);
 
@@ -53,29 +54,44 @@ export function RequestsInbox({ userId }: { userId: string }) {
   async function answer(r: RequestWithUsers, action: "pay" | "decline") {
     setBusyId(r.id);
     setActionError(null);
-    let txHash = action === "pay" ? sentHashes[r.id] : undefined;
+    let inFlight = action === "pay" && recovery?.requestId === r.id ? recovery : null;
     try {
       // Fail before any money moves if the session is gone.
       const token = await getAccessToken();
       if (!token) throw new Error("Session expired. Please log in again.");
-      if (action === "pay" && !txHash) {
-        if (!r.requester_username) throw new Error("This requester has no username yet.");
-        // Send first: the request is only marked paid once the transfer exists.
-        ({ txHash } = await sendUSDC(r.requester_username, String(r.amount), r.note ?? undefined));
-        const sent = txHash;
-        setSentHashes((prev) => ({ ...prev, [r.id]: sent }));
+      if (action === "pay") {
+        // The server marks the request paid when it confirms the transfer, so there is no
+        // separate "mark paid" call that could fail after the money moved.
+        if (inFlight) {
+          if (!inFlight.txHash) throw new Error("The wallet never returned a transaction hash. Open Send to check or cancel this payment.");
+          const recorded = await retryRecord(inFlight);
+          if (recorded.status === "failed") throw new Error("The transfer failed on Base Sepolia. No USDC was sent; tap Pay to try again.");
+          if (recorded.status !== "confirmed") throw new Error("Still waiting for Base Sepolia to confirm. Tap Pay again to check the same transfer.");
+        } else {
+          if (!r.requester_username) throw new Error("This requester has no username yet.");
+          try {
+            await sendUSDC(r.requester_username, String(r.amount), r.note ?? undefined, { requestId: r.id });
+          } catch (error) {
+            if (error instanceof PaymentSendError) inFlight = error.recovery;
+            throw error;
+          }
+        }
+        return;
       }
       const res = await fetch(`/api/requests/${r.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action, txHash }),
+        body: JSON.stringify({ action }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error ?? "Unable to update request.");
-      setSentHashes((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== r.id)));
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Unable to update request.";
-      setActionError(txHash ? `Payment sent, but it couldn't be recorded: ${message} Tap Pay to retry without sending again.` : message);
+      const message = friendlySendError(e);
+      setActionError(inFlight && inFlight.requestId !== r.id
+        ? `Another payment needs attention first: ${message}`
+        : inFlight?.txHash
+          ? `${message} Tap Pay to check the same transfer; it won't send again.`
+          : message);
     } finally {
       setBusyId(null);
       reload();
@@ -83,6 +99,12 @@ export function RequestsInbox({ userId }: { userId: string }) {
   }
 
   const requests = loaded?.tab === tab ? loaded.requests : null;
+
+  useEffect(() => {
+    if (recovery?.requestId && requests?.some((request) => request.id === recovery.requestId && request.status === "paid")) {
+      clearPaymentRecovery(recovery.paymentId);
+    }
+  }, [recovery, requests]);
 
   return (
     <div className="space-y-6">
@@ -102,6 +124,7 @@ export function RequestsInbox({ userId }: { userId: string }) {
           {requests.length === 0 && <p className="text-zinc-500">No requests.</p>}
           {requests.map((r) => {
             const other = tab === "incoming" ? r.requester_username : r.payer_username;
+            const hasPaymentInFlight = recovery?.requestId === r.id;
             return (
               <div key={r.id} className="rounded-xl border bg-white p-4 shadow">
                 <div className="flex items-center justify-between gap-3">
@@ -118,9 +141,14 @@ export function RequestsInbox({ userId }: { userId: string }) {
                       className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white disabled:opacity-50">
                       {busyId === r.id ? "Working…" : `Pay ${r.amount} USDC`}
                     </button>
-                    <button onClick={() => answer(r, "decline")} disabled={busyId !== null}
+                    <button onClick={() => answer(r, "decline")} disabled={busyId !== null || hasPaymentInFlight}
                       className="rounded-lg bg-rose-600 px-4 py-2 text-sm text-white disabled:opacity-50">Decline</button>
                   </div>
+                )}
+                {tab === "incoming" && r.status === "pending" && hasPaymentInFlight && (
+                  <p role="status" className="mt-2 text-xs text-amber-800">
+                    A payment for this request is in progress. Tap Pay to check it, or <Link href="/send" className="underline">open Send</Link> to cancel it.
+                  </p>
                 )}
               </div>
             );

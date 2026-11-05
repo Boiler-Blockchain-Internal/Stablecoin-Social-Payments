@@ -12,12 +12,15 @@ const tabs = [
 ];
 
 export function BottomNav() {
-  const pathname = usePathname();
+  return <BottomNavLinks pathname={usePathname()} />;
+}
+
+export function BottomNavLinks({ pathname }: { pathname: string | null }) {
   return (
     <nav aria-label="Main navigation" className="sticky bottom-0 z-40 border-t border-zinc-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
       <div className="mx-auto flex max-w-xl justify-around">
         {tabs.map(({ href, label, symbol }) => {
-          const active = pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
+          const active = pathname !== null && (pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)));
           return (
             <Link key={href} href={href} aria-current={active ? "page" : undefined}
               className={`flex min-w-0 flex-1 flex-col items-center gap-1 px-1 py-3 text-[11px] ${active ? "font-semibold text-blue-700" : "text-zinc-600"}`}>
