@@ -75,14 +75,11 @@ export function CreateGroupForm({ myUsername }: { myUsername: string }) {
         </div>
 
         <div className="space-y-2">
-          <span className="block text-sm font-medium">Members</span>
-          <div className="flex gap-2"
+          <div className="space-y-2"
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addMember(); } }}>
-            <div className="flex-1">
-              <UserPicker value={candidate} onChange={(value) => { setCandidate(value); setMemberError(null); }} />
-            </div>
+            <UserPicker label="Members" value={candidate} onChange={(value) => { setCandidate(value); setMemberError(null); }} />
             <button type="button" onClick={() => void addMember()} disabled={saving || checking || !candidate}
-              className="min-h-11 rounded-lg border border-zinc-300 px-4 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50">
+              className="min-h-11 w-full rounded-lg border border-zinc-300 px-4 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50">
               {checking ? "Checking…" : "Add"}
             </button>
           </div>
