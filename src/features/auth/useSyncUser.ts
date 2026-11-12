@@ -41,11 +41,11 @@ export function useSyncUser(smartWalletAddress: Address | undefined) {
           setError(null);
           setLoading(false);
           if (!smartWalletAddress || saved.wallet_address) return;
-          if (attempt === 4) throw new Error("Wallet is still being linked. Retry profile sync shortly.");
+          if (attempt === 4) throw new ProfileRequestError("Wallet is still being linked. Retry profile sync shortly.");
         } catch (e) {
           if (controller.signal.aborted) return;
           if (attempt === 4 || (e instanceof ProfileRequestError && !e.retryable)) {
-            setError(e instanceof Error ? e.message : "Profile sync failed.");
+            setError(e instanceof ProfileRequestError ? e.message : "Unable to sync your profile. Please try again.");
             setLoading(false);
             return;
           }

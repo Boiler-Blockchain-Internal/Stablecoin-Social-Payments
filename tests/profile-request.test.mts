@@ -49,3 +49,10 @@ test("malformed responses and transport errors show safe actionable feedback",as
   mock.method(globalThis,"fetch",async()=>{throw new Error("private endpoint detail");});
   await assert.rejects(requestProfile("/api/users/sync","token",new AbortController().signal),/Check your connection/);
 });
+test("non-JSON error pages are classified by status code",async()=>{
+  mock.method(globalThis,"fetch",async()=>new Response("<html>Not Found</html>",{status:404}));
+  await assert.rejects(requestProfile("/api/users/sync","token",new AbortController().signal),error=>error instanceof ProfileRequestError && !error.retryable);
+  mock.restoreAll();
+  mock.method(globalThis,"fetch",async()=>new Response("<html>Bad gateway</html>",{status:502}));
+  await assert.rejects(requestProfile("/api/users/sync","token",new AbortController().signal),error=>error instanceof ProfileRequestError && error.retryable);
+});

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { isValidUsername, normalizeUsername, USERNAME_HELP } from "@/lib/username";
 import type { AppUser } from "./useSyncUser";
-import { requestProfile } from "./profileRequest";
+import { ProfileRequestError, requestProfile } from "./profileRequest";
 
 export function UsernameOnboarding({ onSaved }: { onSaved: (user: AppUser) => void }) {
   const { getAccessToken } = usePrivy();
@@ -26,11 +26,12 @@ export function UsernameOnboarding({ onSaved }: { onSaved: (user: AppUser) => vo
     try {
       const token = await getAccessToken();
       if (controller.signal.aborted) return;
-      if (!token) throw new Error("Session expired. Please log in again.");
+      if (!token) throw new ProfileRequestError("Session expired. Please log in again.", false);
       const user = await requestProfile("/api/users/username", token, controller.signal, username);
       if (!controller.signal.aborted) onSaved(user);
     } catch (e) {
-      if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Unable to save username. Please try again.");
+      // Only our own messages are shown; anything else (e.g. from the auth SDK) gets the generic one.
+      if (!controller.signal.aborted) setError(e instanceof ProfileRequestError ? e.message : "Unable to save username. Please try again.");
     } finally {
       if (!controller.signal.aborted) setSaving(false);
       if (pending.current === controller) pending.current = null;
