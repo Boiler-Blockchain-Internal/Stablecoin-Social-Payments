@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWallets } from "@privy-io/react-auth/smart-wallets";
 import { encodeFunctionData, isHash, type Hash, type Hex } from "viem";
@@ -57,7 +58,10 @@ export function DepositScreen() {
   const { client } = useSmartWallets();
   const destination = useSmartWalletAddress();
   const owner = user?.id ?? null;
-  const [source, setSource] = useState<DepositChain>("arc");
+  // A link can preselect the network (e.g. /deposit?source=ethereum from the faucet card); the user's pick wins.
+  const asked = useSearchParams().get("source");
+  const [picked, setPicked] = useState<DepositChain | null>(null);
+  const source: DepositChain = picked ?? (isDepositChain(asked) ? asked : "arc");
   const [amount, setAmount] = useState("1");
   const [pending, setPending] = useState<Pending | null>(null);
   // The account must be able to record deposits before any USDC is burned; null while checking.
@@ -254,7 +258,7 @@ export function DepositScreen() {
       <p>Don&apos;t start another deposit until this one finishes; the USDC has already left your source wallet.</p>
     </div> : <div className="space-y-4 rounded-xl border border-zinc-200 bg-white p-4">
       <label className="block text-sm font-medium">From network
-        <select value={source} onChange={(event) => setSource(event.target.value as DepositChain)} disabled={busy}
+        <select value={source} onChange={(event) => setPicked(event.target.value as DepositChain)} disabled={busy}
           className="mt-2 w-full rounded-lg border border-zinc-300 p-3">
           <option value="arc">Arc Testnet (arrives in about a minute)</option>
           <option value="ethereum">Ethereum Sepolia (about 15–20 minutes)</option>
