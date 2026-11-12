@@ -1,37 +1,40 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { isValidUsername, normalizeUsername, USERNAME_HELP } from "@/lib/username";
 import type { AppUser } from "./useSyncUser";
+import { requestProfile } from "./profileRequest";
 
 export function UsernameOnboarding({ onSaved }: { onSaved: (user: AppUser) => void }) {
   const { getAccessToken } = usePrivy();
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving) return;
+    if (pending.current) return;
     const username = normalizeUsername(value);
     if (!isValidUsername(username)) { setError(USERNAME_HELP); return; }
+    const controller = new AbortController();
+    pending.current = controller;
     setSaving(true);
     setError(null);
     try {
       const token = await getAccessToken();
+      if (controller.signal.aborted) return;
       if (!token) throw new Error("Session expired. Please log in again.");
-      const res = await fetch("/api/users/username", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ username }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Unable to save username.");
-      onSaved(body.user);
+      const user = await requestProfile("/api/users/username", token, controller.signal, username);
+      if (!controller.signal.aborted) onSaved(user);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to save username. Please try again.");
-    } finally { setSaving(false); }
+      if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Unable to save username. Please try again.");
+    } finally {
+      if (!controller.signal.aborted) setSaving(false);
+      if (pending.current === controller) pending.current = null;
+    }
   }
 
   return (
