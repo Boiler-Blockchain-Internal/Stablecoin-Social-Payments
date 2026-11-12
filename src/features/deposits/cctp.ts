@@ -1,9 +1,9 @@
 import {
-  createPublicClient, createWalletClient, custom, defineChain, encodeFunctionData,
-  erc20Abi, http, isAddress, pad, parseUnits, type Address, type Hash, type Hex,
+  createPublicClient, createWalletClient, custom, decodeEventLog, defineChain, encodeFunctionData,
+  erc20Abi, http, isAddress, pad, parseUnits, zeroAddress, type Address, type Hash, type Hex, type Log,
 } from "viem";
-import { sepolia } from "viem/chains";
-import { baseSepolia } from "viem/chains";
+import { baseSepolia, sepolia } from "viem/chains";
+import { USDC_ADDRESS } from "@/lib/chain";
 
 export const CCTP_TOKEN_MESSENGER = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA" as Address;
 export const CCTP_MESSAGE_TRANSMITTER = "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275" as Address;
@@ -69,7 +69,47 @@ export const receiveAbi = [{
   type: "function", name: "receiveMessage", stateMutability: "nonpayable",
   inputs: [{ name: "message", type: "bytes" }, { name: "attestation", type: "bytes" }],
   outputs: [{ name: "success", type: "bool" }],
+}, {
+  // Non-zero once a message's nonce has been received, i.e. the destination mint happened.
+  type: "function", name: "usedNonces", stateMutability: "view",
+  inputs: [{ name: "nonce", type: "bytes32" }], outputs: [{ name: "", type: "uint256" }],
 }] as const;
+
+export function isDepositChain(value: unknown): value is DepositChain {
+  return value === "ethereum" || value === "arc";
+}
+
+type ReceiptLog = Pick<Log, "address" | "data" | "topics">;
+
+/** The CCTP burn in these logs that sends `source` USDC to `recipient` on Base Sepolia, if any. */
+export function findDepositBurn(logs: readonly ReceiptLog[], source: DepositChain, recipient: Address): { amount: bigint; maxFee: bigint } | null {
+  const usdc = DEPOSIT_CHAINS[source].usdc.toLowerCase();
+  const mintRecipient = recipientBytes32(recipient).toLowerCase();
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== CCTP_TOKEN_MESSENGER.toLowerCase()) continue;
+    try {
+      const event = decodeEventLog({ abi: burnAbi, eventName: "DepositForBurn", data: log.data, topics: log.topics as [Hex, ...Hex[]] });
+      if (event.args.burnToken.toLowerCase() === usdc && event.args.destinationDomain === BASE_DOMAIN &&
+        event.args.mintRecipient.toLowerCase() === mintRecipient && event.args.amount > BigInt(0)) {
+        return { amount: event.args.amount, maxFee: event.args.maxFee };
+      }
+    } catch { /* Another TokenMessenger event. */ }
+  }
+  return null;
+}
+
+/** Base Sepolia USDC minted to `recipient` in these logs (CCTP mints are Transfers from the zero address). */
+export function mintedTo(logs: readonly ReceiptLog[], recipient: Address): bigint {
+  let total = BigInt(0);
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== USDC_ADDRESS.toLowerCase()) continue;
+    try {
+      const event = decodeEventLog({ abi: erc20Abi, eventName: "Transfer", data: log.data, topics: log.topics as [Hex, ...Hex[]] });
+      if (event.args.from === zeroAddress && event.args.to.toLowerCase() === recipient.toLowerCase()) total += event.args.value;
+    } catch { /* Not a Transfer. */ }
+  }
+  return total;
+}
 
 export type Eip1193Provider = {
   request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;

@@ -31,7 +31,19 @@ export type HistoryRequest = {
   createdAt: string;
 };
 
-export type ActivityItem = HistoryTransaction | HistoryRequest;
+export type HistoryDeposit = {
+  kind: "deposit";
+  id: string;
+  toUser: string;
+  source: "ethereum" | "arc";
+  amount: string;
+  status: "pending" | "completed";
+  txHash: string | null;
+  groupId: null;
+  createdAt: string;
+};
+
+export type ActivityItem = HistoryTransaction | HistoryRequest | HistoryDeposit;
 export type ActivityFilter = "all" | "sent" | "received" | "pending";
 export type HistoryGroup = { id: string; name: string };
 export type HistoryPerson = { id: string; username: string };

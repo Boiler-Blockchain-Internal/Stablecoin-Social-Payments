@@ -17,6 +17,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="mx-auto w-full max-w-xl flex-1 px-4 py-6">{children}</main>
+      {/* usePathname suspends on dynamic routes; the fallback keeps the nav in the prerendered shell. */}
       <Suspense fallback={<BottomNavLinks pathname={null} />}>
         <BottomNav />
       </Suspense>
