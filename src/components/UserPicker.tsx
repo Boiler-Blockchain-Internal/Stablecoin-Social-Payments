@@ -93,8 +93,10 @@ function UserPickerField({ value, onChange, selectedUser, onSelect, placeholder 
             }
             if (event.key === "Enter" && open && users[active]) { event.preventDefault(); event.stopPropagation(); select(users[active]); }
           }}
-          className="min-w-0 w-full rounded-lg border border-zinc-300 px-3 py-2 focus:outline-2 focus:outline-zinc-900 disabled:opacity-50" />
-        {signedIn && input && <button type="button" disabled={disabled} onClick={() => select(null)} className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm">Clear</button>}
+          className="min-h-11 min-w-0 w-full rounded-lg border border-zinc-300 px-3 py-2 focus:outline-2 focus:outline-zinc-900 disabled:opacity-50" />
+        {signedIn && input && <button type="button" disabled={disabled} onClick={() => select(null)}
+          onKeyDown={(event) => { if (event.key === "Enter") event.stopPropagation(); }}
+          className="min-h-11 shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm">Clear</button>}
       </div>
       <p id={`${id}-status`} role="status" className="text-sm text-zinc-500">
         {!ready ? "Loading session…" : !authenticated ? "Log in to search users." : disabled ? "Search disabled." : selection ? `Selected @${selection.username}` : loading ? "Searching…" : searchable && result && !result.error ? users.length ? `${users.length} matching users` : "No users found." : input && !/^[a-z0-9_]{1,20}$/.test(query) ? "Search using letters, numbers, or underscores." : "Type a username to search."}
