@@ -67,7 +67,11 @@ export function DepositScreen() {
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState<{ amount: string; mintHash: string | null } | null>(null);
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  // Set on every mount: React's dev StrictMode unmounts and remounts once, which must not leave it false.
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
 
   const api = useCallback(async (method: "GET" | "POST", body?: unknown) => {
     const token = await getAccessToken();
