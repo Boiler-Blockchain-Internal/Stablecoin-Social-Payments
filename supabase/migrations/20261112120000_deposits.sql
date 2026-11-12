@@ -12,10 +12,9 @@ create table public.deposits (
   created_at    timestamptz not null default now()
 );
 
-create index deposits_user_id_idx on public.deposits (user_id);
+create index deposits_user_id_created_at_idx on public.deposits (user_id, created_at desc);
 
--- Same model as the other tables: public reads, writes only through API routes (service role).
+-- Only API routes (service role) read or write deposits: a burn hash links a user to their outside wallet,
+-- so unlike the other tables there is no public read policy.
 alter table public.deposits enable row level security;
-create policy "Public read" on public.deposits for select to anon, authenticated using (true);
-grant select on public.deposits to anon, authenticated;
 grant all on public.deposits to service_role;

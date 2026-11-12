@@ -9,3 +9,4 @@ Owner: Arjun Bawa — Activity screen at `/activity`, shared bottom navigation, 
 - The shared Send function in this repository snapshot still returns fake transaction hashes; real end-to-end transfers cannot be verified until the Send owner's real on-chain implementation is merged.
 - The Send navigation points to a placeholder `/send` route linking to the existing `/test-send` developer screen. The Send owner should replace the placeholder with their finished `/send` screen.
 - **Security follow-up for the lead:** the initial migration's public SELECT RLS policies make transactions and requests readable to anonymous clients. Revoke those policies/grants in a separate coordinated migration. The new History endpoints deliberately read through authenticated server APIs but do not fix existing public table exposure.
+- Deposits (`kind: "deposit"`) come from `deposits` and show as received; they have no counterparty, so person and group filters skip them.

@@ -3,7 +3,7 @@
 import { formatUnits, isAddress, isHash, type Address, type Hash, type Hex } from "viem";
 import { getSmartWalletAddress, UnauthorizedError } from "@/lib/privy";
 import { getSupabaseAdmin } from "@/lib/supabase-server";
-import { CCTP_MESSAGE_TRANSMITTER, DEPOSIT_CHAINS, baseClient, findDepositBurn, isDepositChain, mintedTo, receiveAbi, sourceClient, type DepositChain } from "./cctp";
+import { BASE_DOMAIN, CCTP_MESSAGE_TRANSMITTER, DEPOSIT_CHAINS, baseClient, findDepositBurn, isDepositChain, mintedTo, receiveAbi, sourceClient, type DepositChain } from "./cctp";
 
 export class DepositError extends Error {
   constructor(message: string, readonly status: number) {
@@ -70,9 +70,13 @@ export async function listDeposits(privyId: string): Promise<DepositRow[]> {
   return (data ?? []) as DepositRow[];
 }
 
-type IrisMessage = { status?: string; message?: string; attestation?: string; eventNonce?: string; destinationMintTxHash?: string };
+type IrisMessage = {
+  status?: string; message?: string; attestation?: string; eventNonce?: string; destinationMintTxHash?: string;
+  decodedMessage?: { destinationDomain?: string; decodedMessageBody?: { mintRecipient?: string } };
+};
 
-async function fetchAttestation(net: DepositNetwork, source: DepositChain, burnHash: string): Promise<IrisMessage | null> {
+/** Circle's complete attestation for this user's burn (a transaction can hold several burns). */
+async function fetchAttestation(net: DepositNetwork, source: DepositChain, burnHash: string, wallet: Address): Promise<IrisMessage | null> {
   let response: Response;
   try {
     response = await net.fetch(`${IRIS}/${DEPOSIT_CHAINS[source].domain}?transactionHash=${burnHash}`, { cache: "no-store", signal: AbortSignal.timeout(12_000) });
@@ -84,7 +88,9 @@ async function fetchAttestation(net: DepositNetwork, source: DepositChain, burnH
   if (!response.ok) throw new DepositError("Circle's attestation service is unavailable. Try again shortly.", 502);
   const body = await response.json().catch(() => ({})) as { messages?: IrisMessage[] };
   return (body.messages ?? []).find((m) => m.status === "complete" && m.message?.startsWith("0x") &&
-    m.attestation?.startsWith("0x") && m.eventNonce?.startsWith("0x")) ?? null;
+    m.attestation?.startsWith("0x") && m.eventNonce?.startsWith("0x") &&
+    m.decodedMessage?.destinationDomain === String(BASE_DOMAIN) &&
+    m.decodedMessage.decodedMessageBody?.mintRecipient?.toLowerCase() === wallet.toLowerCase()) ?? null;
 }
 
 /**
@@ -133,7 +139,7 @@ export async function progressDeposit(privyId: string, input: Record<string, unk
     }
   }
 
-  const attested = await fetchAttestation(net, source, burnHash);
+  const attested = await fetchAttestation(net, source, burnHash, caller.wallet);
   if (!attested) return { status: "attesting", deposit };
   const used = await net.base.readContract({ address: CCTP_MESSAGE_TRANSMITTER, abi: receiveAbi, functionName: "usedNonces", args: [attested.eventNonce as Hex] });
   if (used === BigInt(0)) return { status: "ready", deposit, message: attested.message as Hex, attestation: attested.attestation as Hex };

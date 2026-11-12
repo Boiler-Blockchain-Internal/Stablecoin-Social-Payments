@@ -62,13 +62,13 @@ const { progressDeposit } = await import("../src/features/deposits/server");
 const { burnAbi, findDepositBurn, mintedTo, CCTP_TOKEN_MESSENGER, DEPOSIT_CHAINS } = await import("../src/features/deposits/cctp");
 const { USDC_ADDRESS } = await import("../src/lib/chain");
 
-function burnLog({ recipient = WALLET, domain = 6, token = DEPOSIT_CHAINS.arc.usdc as Address, amount = BigInt(2_500_000), maxFee = BigInt(0) } = {}) {
+function burnLog({ recipient = WALLET, domain = 6, token = DEPOSIT_CHAINS.arc.usdc as Address, amount = BigInt(2_500_000), maxFee = BigInt(0), caller = `0x${"0".repeat(64)}` as Hex } = {}) {
   return {
     address: CCTP_TOKEN_MESSENGER,
     topics: encodeEventTopics({ abi: burnAbi, eventName: "DepositForBurn", args: { burnToken: token, depositor: OTHER_WALLET, minFinalityThreshold: 2000 } }) as [Hex, ...Hex[]],
     data: encodeAbiParameters(
       [{ type: "uint256" }, { type: "bytes32" }, { type: "uint32" }, { type: "bytes32" }, { type: "bytes32" }, { type: "uint256" }, { type: "bytes" }],
-      [amount, pad(recipient, { size: 32 }), domain, pad(CCTP_TOKEN_MESSENGER, { size: 32 }), `0x${"0".repeat(64)}`, maxFee, "0x"],
+      [amount, pad(recipient, { size: 32 }), domain, pad(CCTP_TOKEN_MESSENGER, { size: 32 }), caller, maxFee, "0x"],
     ),
   };
 }
@@ -92,12 +92,14 @@ let irisCalls = 0;
 const net = {
   source: () => ({ getTransactionReceipt: async () => { if (!burnReceipt) throw new Error("not found"); return burnReceipt; } }),
   base: {
-    readContract: async () => usedNonce,
+    readContract: async ({ args }: { args: unknown[] }) => { nonceAsked = args; return usedNonce; },
     getTransactionReceipt: async () => { if (!mintReceipt) throw new Error("not found"); return mintReceipt; },
   },
   fetch: async () => { irisCalls++; return new Response(JSON.stringify(iris.body ?? {}), { status: iris.status }); },
 } as unknown as Parameters<typeof progressDeposit>[2];
-const completeMessage = { status: "complete", message: "0x1234", attestation: "0x5678", eventNonce: NONCE };
+const completeMessage = { status: "complete", message: "0x1234", attestation: "0x5678", eventNonce: NONCE,
+  decodedMessage: { destinationDomain: "6", decodedMessageBody: { mintRecipient: WALLET.toLowerCase() } } };
+let nonceAsked: unknown[] = [];
 
 beforeEach(() => {
   nextId = 0;
@@ -118,6 +120,9 @@ test("findDepositBurn matches only a burn of the source's USDC to this wallet on
   assert.equal(findDepositBurn([burnLog({ domain: 3 })], "arc", WALLET), null);
   assert.equal(findDepositBurn([burnLog()], "ethereum", WALLET), null);
   assert.equal(findDepositBurn([{ ...burnLog(), address: OTHER_WALLET }], "arc", WALLET), null);
+  // A burn only some other contract may mint can never be completed by the smart wallet.
+  assert.equal(findDepositBurn([burnLog({ caller: pad(OTHER_WALLET, { size: 32 }) })], "arc", WALLET), null);
+  assert.ok(findDepositBurn([burnLog({ caller: pad(WALLET, { size: 32 }) })], "arc", WALLET));
 });
 
 test("mintedTo sums Base USDC minted to the wallet", () => {
@@ -160,6 +165,17 @@ test("a ready attestation is handed to the browser to mint", async () => {
   const result = await progressDeposit("account-a", { source: "arc", burnHash: BURN }, net);
   assert.equal(result.status, "ready");
   assert.ok(result.status === "ready" && result.message === "0x1234" && result.attestation === "0x5678");
+  assert.deepEqual(nonceAsked, [NONCE], "checks Base for this message's nonce");
+});
+
+test("Circle messages for someone else's burn in the same transaction are ignored", async () => {
+  const theirs = { ...completeMessage, eventNonce: `0x${"02".repeat(32)}`,
+    decodedMessage: { destinationDomain: "6", decodedMessageBody: { mintRecipient: OTHER_WALLET.toLowerCase() } } };
+  iris = { status: 200, body: { messages: [theirs] } };
+  assert.equal((await progressDeposit("account-a", { source: "arc", burnHash: BURN }, net)).status, "attesting");
+  iris = { status: 200, body: { messages: [theirs, completeMessage] } };
+  await progressDeposit("account-a", { source: "arc", burnHash: BURN }, net);
+  assert.deepEqual(nonceAsked, [NONCE]);
 });
 
 test("once Base has used the nonce the deposit completes, keeping a verified mint hash", async () => {

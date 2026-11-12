@@ -3,13 +3,14 @@ import {
   erc20Abi, http, isAddress, pad, parseUnits, zeroAddress, type Address, type Hash, type Hex, type Log,
 } from "viem";
 import { baseSepolia, sepolia } from "viem/chains";
-import { USDC_ADDRESS } from "@/lib/chain";
+import { BASE_SEPOLIA_USDC_ADDRESS, RPC_URL } from "@/lib/chain";
 
 export const CCTP_TOKEN_MESSENGER = "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA" as Address;
 export const CCTP_MESSAGE_TRANSMITTER = "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275" as Address;
 export const BASE_DOMAIN = 6;
 export const STANDARD_FINALITY = 2000;
 export const ZERO_BYTES32 = `0x${"0".repeat(64)}` as Hex;
+const ARC_GAS_RESERVE = BigInt(50_000); // 0.05 USDC
 
 export const arcTestnet = defineChain({
   id: 5042002,
@@ -85,12 +86,14 @@ type ReceiptLog = Pick<Log, "address" | "data" | "topics">;
 export function findDepositBurn(logs: readonly ReceiptLog[], source: DepositChain, recipient: Address): { amount: bigint; maxFee: bigint } | null {
   const usdc = DEPOSIT_CHAINS[source].usdc.toLowerCase();
   const mintRecipient = recipientBytes32(recipient).toLowerCase();
+  // The smart wallet submits the mint, so only an open (zero) or wallet-only destination caller can complete.
   for (const log of logs) {
     if (log.address.toLowerCase() !== CCTP_TOKEN_MESSENGER.toLowerCase()) continue;
     try {
       const event = decodeEventLog({ abi: burnAbi, eventName: "DepositForBurn", data: log.data, topics: log.topics as [Hex, ...Hex[]] });
       if (event.args.burnToken.toLowerCase() === usdc && event.args.destinationDomain === BASE_DOMAIN &&
-        event.args.mintRecipient.toLowerCase() === mintRecipient && event.args.amount > BigInt(0)) {
+        event.args.mintRecipient.toLowerCase() === mintRecipient && event.args.amount > BigInt(0) &&
+        (event.args.destinationCaller === ZERO_BYTES32 || event.args.destinationCaller.toLowerCase() === mintRecipient)) {
         return { amount: event.args.amount, maxFee: event.args.maxFee };
       }
     } catch { /* Another TokenMessenger event. */ }
@@ -102,7 +105,8 @@ export function findDepositBurn(logs: readonly ReceiptLog[], source: DepositChai
 export function mintedTo(logs: readonly ReceiptLog[], recipient: Address): bigint {
   let total = BigInt(0);
   for (const log of logs) {
-    if (log.address.toLowerCase() !== USDC_ADDRESS.toLowerCase()) continue;
+    // CCTP always mints canonical Circle USDC, whatever the app's USDC override says.
+    if (log.address.toLowerCase() !== BASE_SEPOLIA_USDC_ADDRESS.toLowerCase()) continue;
     try {
       const event = decodeEventLog({ abi: erc20Abi, eventName: "Transfer", data: log.data, topics: log.topics as [Hex, ...Hex[]] });
       if (event.args.from === zeroAddress && event.args.to.toLowerCase() === recipient.toLowerCase()) total += event.args.value;
@@ -141,7 +145,9 @@ export async function connectSource(provider: Eip1193Provider, source: DepositCh
     try {
       await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: `0x${config.chain.id.toString(16)}` }] });
     } catch (error) {
-      if ((error as { code?: number }).code !== 4902) throw error;
+      // 4902 = unknown chain; MetaMask mobile nests it.
+      const unknownChain = (error as { code?: number; data?: { originalError?: { code?: number } } });
+      if (unknownChain.code !== 4902 && unknownChain.data?.originalError?.code !== 4902) throw error;
       await provider.request({ method: "wallet_addEthereumChain", params: [{
         chainId: `0x${config.chain.id.toString(16)}`,
         chainName: config.chain.name,
@@ -170,7 +176,13 @@ export async function burnFromWallet(
     publicClient.readContract({ address: config.usdc, abi: erc20Abi, functionName: "balanceOf", args: [sender] }),
     publicClient.readContract({ address: config.usdc, abi: erc20Abi, functionName: "allowance", args: [sender, CCTP_TOKEN_MESSENGER] }),
   ]);
-  if (balance < units) throw new Error(`Insufficient native USDC on ${config.label}.`);
+  // Arc pays gas in the same USDC, so leave a little for the approve and burn fees.
+  const reserve = source === "arc" ? ARC_GAS_RESERVE : BigInt(0);
+  if (balance < units + reserve) {
+    throw new Error(source === "arc"
+      ? `Not enough USDC on Arc. Keep about 0.05 USDC beyond the deposit for network fees.`
+      : `Not enough USDC on ${config.label}.`);
+  }
   if (allowance < units) {
     onProgress("Approve USDC in your source wallet…");
     const approveHash = await wallet.sendTransaction({
@@ -193,4 +205,4 @@ export async function burnFromWallet(
   });
 }
 
-export const baseClient = createPublicClient({ chain: baseSepolia, transport: http("https://sepolia.base.org") });
+export const baseClient = createPublicClient({ chain: baseSepolia, transport: http(RPC_URL) });

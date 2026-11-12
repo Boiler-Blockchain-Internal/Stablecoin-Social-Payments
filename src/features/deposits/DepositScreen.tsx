@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSmartWallets } from "@privy-io/react-auth/smart-wallets";
 import { encodeFunctionData, isHash, type Hash, type Hex } from "viem";
@@ -8,7 +8,7 @@ import { chain } from "@/lib/chain";
 import { useSmartWalletAddress } from "@/features/auth/useSmartWalletAddress";
 import {
   baseClient, burnFromWallet, CCTP_MESSAGE_TRANSMITTER, DEPOSIT_CHAINS, isDepositChain, parseDepositAmount, receiveAbi,
-  type DepositChain, type Eip1193Provider,
+  sourceClient, type DepositChain, type Eip1193Provider,
 } from "./cctp";
 
 /** A burn the browser knows about; the server is the source of truth once it has recorded it. */
@@ -19,10 +19,14 @@ type Progress =
   | { status: "ready"; message: Hex; attestation: Hex }
   | { status: "completed"; deposit: { mint_tx_hash: string | null } };
 
+/** An API error, with its HTTP status so the polling loop can tell a hiccup from a final answer. */
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 const storageKey = (owner: string) => `stablepay:cctp-deposit:v1:${owner}`;
-const POLL_MS = 5_000;
-// Keep checking while the page is open for about 4 minutes (Arc attests in seconds; Ethereum takes ~15–20 min).
-const MAX_POLLS = 48;
+// Arc attests in seconds; Ethereum Sepolia takes ~15–20 minutes, so it checks less often for longer.
+const POLLING = { arc: { everyMs: 5_000, times: 48 }, ethereum: { everyMs: 10_000, times: 150 } } as const;
 
 function readPending(owner: string): Pending | null {
   try {
@@ -39,6 +43,15 @@ function clearPending(owner: string) {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function friendlyMintError(cause: unknown): string {
+  const text = cause instanceof Error ? cause.message.toLowerCase() : "";
+  if (text.includes("paymaster") || text.includes("sponsor") || text.includes("policy")) {
+    return "Gas sponsorship rejected the mint on Base Sepolia. The deposit is saved; check the paymaster policy allows the CCTP MessageTransmitter, then tap Check deposit.";
+  }
+  if (text.includes("rejected") || text.includes("denied")) return "The mint was cancelled. The deposit is saved; tap Check deposit to finish it.";
+  return cause instanceof Error ? cause.message : "The mint on Base Sepolia failed. Tap Check deposit to try again.";
+}
+
 export function DepositScreen() {
   const { ready, authenticated, user, getAccessToken, login } = usePrivy();
   const { client } = useSmartWallets();
@@ -47,46 +60,81 @@ export function DepositScreen() {
   const [source, setSource] = useState<DepositChain>("arc");
   const [amount, setAmount] = useState("1");
   const [pending, setPending] = useState<Pending | null>(null);
+  // The account must be able to record deposits before any USDC is burned; null while checking.
+  const [canRecord, setCanRecord] = useState<{ owner: string; ok: boolean; reason?: string } | null>(null);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [completed, setCompleted] = useState<{ amount: string; mintHash: string | null } | null>(null);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
 
   const api = useCallback(async (method: "GET" | "POST", body?: unknown) => {
     const token = await getAccessToken();
-    if (!token) throw new Error("Session expired. Please log in again.");
-    const response = await fetch("/api/deposits", {
-      method,
-      headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      cache: "no-store",
-    });
+    if (!token) throw new ApiError("Session expired. Please log in again.", 401);
+    let response: Response;
+    try {
+      response = await fetch("/api/deposits", {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        cache: "no-store",
+      });
+    } catch {
+      throw new ApiError("Network error while checking the deposit.", 0);
+    }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error ?? "Couldn't check the deposit.");
+    if (!response.ok) throw new ApiError(data.error ?? "Couldn't check the deposit.", response.status);
     return data;
   }, [getAccessToken]);
 
-  // Resume an unfinished deposit: this browser's copy first, else the server's (any device).
+  // Resume an unfinished deposit (this browser's copy first, else the server's) and confirm the account can record one.
   useEffect(() => {
     if (!owner) return;
     let cancelled = false;
     (async () => {
       const local = readPending(owner);
-      if (local) { if (!cancelled) setPending(local); return; }
       try {
         const { deposits } = await api("GET") as { deposits: { source: DepositChain; amount: string; burn_tx_hash: Hash; status: string }[] };
+        if (cancelled) return;
         const open = deposits.find((d) => d.status === "pending");
-        if (!cancelled && open) setPending({ owner, source: open.source, amount: String(open.amount), burnHash: open.burn_tx_hash });
-      } catch { /* Offline or not set up yet; the form still works. */ }
+        setPending(local ?? (open ? { owner, source: open.source, amount: String(open.amount), burnHash: open.burn_tx_hash } : null));
+        setCanRecord({ owner, ok: true });
+      } catch (cause) {
+        if (cancelled) return;
+        setPending(local);
+        setCanRecord({ owner, ok: false, reason: cause instanceof Error ? cause.message : "Couldn't reach StablePay." });
+      }
     })();
     return () => { cancelled = true; };
   }, [owner, api]);
 
+  /** The server rejected this burn for good: forget it so the user isn't stuck. */
+  function abandon(item: Pending, message: string) {
+    clearPending(item.owner);
+    setPending(null);
+    setProgress("");
+    setError(message);
+  }
+
   async function finish(item: Pending) {
     let current = item;
     let mintedOnce = false;
-    for (let poll = 0; poll < MAX_POLLS; poll++) {
-      const next = await api("POST", { source: current.source, burnHash: current.burnHash, mintHash: current.mintHash }) as Progress;
+    const { everyMs, times } = POLLING[current.source];
+    for (let poll = 0; poll < times && alive.current; poll++) {
+      let next: Progress;
+      try {
+        next = await api("POST", { source: current.source, burnHash: current.burnHash, mintHash: current.mintHash }) as Progress;
+      } catch (cause) {
+        // Server or network hiccups: keep checking. A 4xx is a final answer about this burn.
+        if (cause instanceof ApiError && cause.status >= 400 && cause.status < 500) {
+          if (cause.status === 409) { abandon(current, cause.message); return; }
+          throw cause;
+        }
+        setProgress("Having trouble reaching the network; retrying…");
+        await sleep(everyMs);
+        continue;
+      }
       if (next.status === "completed") {
         clearPending(current.owner);
         setPending(null);
@@ -111,18 +159,20 @@ export function DepositScreen() {
           await baseClient.waitForTransactionReceipt({ hash: mintHash, timeout: 120_000 });
         } catch (cause) {
           // Someone else may have minted it first; the next check tells us.
-          const minted = await api("POST", { source: current.source, burnHash: current.burnHash }) as Progress;
-          if (minted.status === "completed") continue;
-          throw cause;
+          const minted = await api("POST", { source: current.source, burnHash: current.burnHash, mintHash: current.mintHash }).catch(() => null) as Progress | null;
+          if (minted?.status === "completed") continue;
+          throw new Error(friendlyMintError(cause));
         }
         continue;
       }
       setProgress(next.status === "burning"
         ? "Waiting for your burn to confirm on the source network…"
-        : `Waiting for Circle to attest the burn (${current.source === "arc" ? "usually seconds on Arc" : "about 15–20 minutes from Ethereum Sepolia"}). You can leave this page; the deposit is saved.`);
-      await sleep(POLL_MS);
+        : next.status === "ready"
+          ? "Confirming the mint on Base Sepolia…"
+          : `Waiting for Circle to attest the burn (${current.source === "arc" ? "usually seconds on Arc" : "about 15–20 minutes from Ethereum Sepolia"}). You can leave this page; the deposit is saved.`);
+      await sleep(everyMs);
     }
-    setProgress("Still waiting on Circle. Your deposit is saved; come back later and tap Check deposit.");
+    if (alive.current) setProgress("Still waiting on Circle. Your deposit is saved; come back later and tap Check deposit.");
   }
 
   async function run() {
@@ -136,13 +186,30 @@ export function DepositScreen() {
         throw new Error("Deposits need a browser wallet such as MetaMask holding USDC on the source network. On a phone, open StablePay in MetaMask's built-in browser.");
       }
       const burnHash = await burnFromWallet(injected, source, destination, amount, setProgress);
-      const item: Pending = { owner, source, amount, burnHash };
+      let item: Pending = { owner, source, amount, burnHash };
       savePending(item);
       setPending(item);
+      // Follow the burn to the transaction that actually mines (MetaMask "Speed up" replaces it).
+      setProgress("Waiting for your burn to confirm on the source network…");
+      let cancelledInWallet = false;
+      const receipt = await sourceClient(source).waitForTransactionReceipt({
+        hash: burnHash,
+        timeout: 300_000,
+        onReplaced: (replacement) => { if (replacement.reason === "cancelled") cancelledInWallet = true; },
+      });
+      if (cancelledInWallet || receipt.status !== "success") {
+        abandon(item, cancelledInWallet ? "The burn was cancelled in your wallet. No USDC left it." : "The burn failed on the source network. No USDC left your wallet.");
+        return;
+      }
+      if (receipt.transactionHash.toLowerCase() !== burnHash.toLowerCase()) {
+        item = { ...item, burnHash: receipt.transactionHash };
+        savePending(item);
+        setPending(item);
+      }
       await finish(item);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The deposit could not be completed.");
-    } finally { setBusy(false); }
+      if (alive.current) setError(cause instanceof Error ? cause.message : "The deposit could not be completed.");
+    } finally { if (alive.current) setBusy(false); }
   }
 
   if (!ready) return <p role="status" className="py-16 text-center text-sm text-zinc-500">Loading…</p>;
@@ -156,12 +223,14 @@ export function DepositScreen() {
     );
   }
 
+  const checked = canRecord?.owner === owner ? canRecord : null;
   const config = pending ? DEPOSIT_CHAINS[pending.source] : null;
   return <div className="space-y-5">
     <div>
       <h1 className="text-2xl font-semibold">Deposit USDC</h1>
       <p className="mt-1 text-sm text-zinc-600">Bring test USDC from another network into your StablePay wallet on Base Sepolia. It arrives as regular USDC you can send, request and split.</p>
     </div>
+    {checked && !checked.ok && !pending && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">{checked.reason} Deposits are disabled until this is fixed, so no USDC is burned without being tracked.</p>}
     {pending && config ? <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
       <p className="font-semibold">Deposit in progress</p>
       <p>From {config.label} · {pending.amount} USDC</p>
@@ -180,11 +249,11 @@ export function DepositScreen() {
           className="mt-2 w-full rounded-lg border border-zinc-300 p-3" placeholder="1.00" />
       </label>
       <div className="text-sm text-zinc-600"><p>To: your StablePay wallet on Base Sepolia</p><p className="mt-1 break-all font-mono text-xs">{destination || "Loading…"}</p></div>
-      <p className="text-xs text-zinc-500">Uses Circle CCTP (Standard, no bridge fee). You approve and burn in your browser wallet and pay that network&apos;s gas{source === "arc" ? " (Arc gas is paid in USDC, so keep a little extra)" : " (Sepolia ETH)"}. The mint on Base is sponsored.</p>
+      <p className="text-xs text-zinc-500">Uses Circle CCTP (Standard, no bridge fee). You approve and burn in your browser wallet and pay that network&apos;s gas{source === "arc" ? " (Arc gas is paid in USDC, so keep about 0.05 extra)" : " (Sepolia ETH)"}. The mint on Base is sponsored.</p>
     </div>}
-    <button type="button" onClick={run} disabled={busy || !destination || !client}
+    <button type="button" onClick={run} disabled={busy || !destination || !client || (!pending && !checked?.ok)}
       className="w-full rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white disabled:opacity-50">
-      {busy ? "Working…" : pending ? "Check deposit" : "Deposit USDC"}
+      {busy ? "Working…" : pending ? "Check deposit" : checked ? "Deposit USDC" : "Checking your account…"}
     </button>
     {progress && <p role="status" className="text-sm text-zinc-700">{progress}</p>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
