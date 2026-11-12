@@ -16,6 +16,7 @@ The preview-only route/inventory are absent on all Week 4 branches. The archived
 | P2 | Username saves had no deadline; sync deadline ended before body parsing | PR #26: full 15-second request/body deadline, safe response/error validation and retry classification |
 | P2 | Enter on UserPicker Clear reached Groups' parent add shortcut; browser assertion failed before fix | UserPicker PR #27: stop Enter propagation on Clear, preserve native activation |
 | P2 | Input/Clear mobile hit targets were below the chosen 44px minimum | PR #27: minimum heights; touch/keyboard checks at 320/375/390px |
+| P1 | Send's direct balance-hook call could read an old SDK wallet under a different Privy account; actual hook browser reproduction failed before fix | PR #29: shared linked-wallet predicate enforced by both selector and hook, without changing Send logic |
 
 No new wallet, profile-editing or faucet feature is required. Existing balance/network/precision, account-switch and Clipboard API tests are rerun as regression evidence; further production changes require an actual reproduced issue.
 
@@ -23,7 +24,7 @@ No new wallet, profile-editing or faucet feature is required. Existing balance/n
 
 Baseline main: 78 tests. Auth fix branch: 83 tests (five new request-lifetime tests), lint, explicit TypeScript and production build passed. Its real-component browser regression now passes for stale saves, timeout/retry and conflict feedback; existing onboarding/profile fixture suites passed. UserPicker branch: 78 tests, lint, explicit TypeScript, build, existing browser suite, and new keyboard/touch/mobile/debounce suite passed. These are unit and controlled-service browser results, not physical phone or real OAuth evidence.
 
-The separate integration script exercises the actual Send/Requests/Groups forms using mocked transport/identity/wallet services. It checks recipient selection and request/member payloads without sending funds or writing to the real database. A combined local branch is used to verify PR #26 and #27 together; it is not pushed to main.
+The separate integration script exercises the actual Send/Requests/Groups forms using mocked transport/identity/wallet services. It checks recipient selection and request/member payloads without sending funds or writing to the real database. A combined local branch verifies PR #26, #27 and #29 together with these testing materials; it is not pushed to main. The wallet branch passes 82 tests (four predicate tests added to the 78 baseline) plus its direct-hook and existing full balance browser regressions.
 
 The tester checklist and header-only feedback log are in [week4-testing.md](week4-testing.md) and [week4-feedback.csv](week4-feedback.csv). CI results and final executed integration/live-read checks are reported in the PR descriptions and final handoff, not inferred from code existence.
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {authFixture,withBrowserFixture} from './browser-fixture.mjs';
 
 await withBrowserFixture('week4-integration',`import React from 'react';import {createRoot} from 'react-dom/client';import {Shell} from './src/components/Shell';import {SendScreen} from './src/features/send/SendScreen';import {CreateRequestForm} from './src/features/requests/CreateRequestForm';import {CreateGroupForm} from './src/features/groups/CreateGroupForm';const view=location.pathname==='/send'?<SendScreen/>:location.pathname==='/requests'?<CreateRequestForm/>:<CreateGroupForm myUsername="club_tester"/>;createRoot(document.getElementById('root')).render(<Shell>{view}</Shell>);`,{
-  '@privy-io/react-auth':authFixture,
+  '@privy-io/react-auth':authFixture+"\nstate={...state,user:{...state.user,linkedAccounts:[{type:'smart_wallet',address:'0x1111111111111111111111111111111111111111'}]}};",
   '@privy-io/react-auth/smart-wallets':"export const useSmartWallets=()=>({client:{account:{address:'0x1111111111111111111111111111111111111111'}}});",
   '@/features/groups/useCurrentUser':"export const useCurrentUser=()=>({ready:true,authenticated:true,user:{id:'11111111-1111-4111-8111-111111111111',username:'club_tester'},error:null});",
   '@/features/requests/useIncomingRequests':"export const useIncomingRequests=()=>({pending:0,notice:null,dismiss:()=>{}});",
