@@ -57,7 +57,11 @@ export function DepositScreen() {
   const { client } = useSmartWallets();
   const destination = useSmartWalletAddress();
   const owner = user?.id ?? null;
-  const [source, setSource] = useState<DepositChain>("arc");
+  // Preselect the network a link asked for (e.g. /deposit?source=ethereum from the faucet card).
+  const [source, setSource] = useState<DepositChain>(() => {
+    const asked = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("source");
+    return isDepositChain(asked) ? asked : "arc";
+  });
   const [amount, setAmount] = useState("1");
   const [pending, setPending] = useState<Pending | null>(null);
   // The account must be able to record deposits before any USDC is burned; null while checking.
