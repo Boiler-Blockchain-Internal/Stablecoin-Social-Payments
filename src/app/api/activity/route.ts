@@ -13,14 +13,15 @@ export async function GET(request: Request) {
   try {
     const caller = await getCallerUser(await requirePrivyUser(request));
     const db = getSupabaseAdmin();
-    const [sent, received, requested, owed, memberships] = await Promise.all([
+    const [sent, received, requested, owed, memberships, deposits] = await Promise.all([
       db.from("transactions").select(TX_COLUMNS).eq("from_user", caller.id),
       db.from("transactions").select(TX_COLUMNS).eq("to_user", caller.id),
       db.from("requests").select(REQUEST_COLUMNS).eq("requester_id", caller.id),
       db.from("requests").select(REQUEST_COLUMNS).eq("payer_id", caller.id),
       db.from("group_members").select("group_id").eq("user_id", caller.id),
+      db.from("deposits").select("id, source, amount, status, mint_tx_hash, created_at").eq("user_id", caller.id),
     ]);
-    for (const res of [sent, received, requested, owed, memberships]) if (res.error) throw res.error;
+    for (const res of [sent, received, requested, owed, memberships, deposits]) if (res.error) throw res.error;
 
     const transactions = [...new Map([...(sent.data ?? []), ...(received.data ?? [])].map((t) => [t.id, t])).values()];
     const requests = [...new Map([...(requested.data ?? []), ...(owed.data ?? [])].map((r) => [r.id, r])).values()];
@@ -79,6 +80,10 @@ export async function GET(request: Request) {
         requesterUsername: usernames.get(r.requester_id) ?? null, payerUsername: usernames.get(r.payer_id) ?? null,
         amount: String(r.amount), note: r.note, status: "pending" as const,
         groupId: relatedGroup(r.split_id), createdAt: r.created_at,
+      })),
+      ...(deposits.data ?? []).map((d) => ({
+        kind: "deposit" as const, id: d.id, toUser: caller.id, source: d.source, amount: String(d.amount),
+        status: d.status, txHash: d.mint_tx_hash, groupId: null, createdAt: d.created_at,
       })),
     ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
