@@ -93,6 +93,15 @@ test("only verified user's unset username can be claimed", async () => {
   assert.equal((await choose(request({ username: "replacement" }))).status, 409);
   assert.equal(rows[0].username, "rithvik_1");
 });
+test("re-saving your own username after a lost response succeeds instead of conflicting", async () => {
+  await sync(request());
+  assert.equal((await choose(request({ username: "chris" }))).status, 200);
+  const retry = await choose(request({ username: "Chris" }));
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).user.username, "chris");
+  await sync(request({}, "account-b"));
+  assert.equal((await choose(request({ username: "chris" }, "account-b"))).status, 409);
+});
 test("invalid input, malformed JSON, and missing profiles are rejected", async () => {
   for (const username of [null, "ab", "a b", "a".repeat(21), 42]) assert.equal((await choose(request({ username }))).status, 400);
   assert.equal((await choose(new Request("http://localhost", { method: "POST", headers: { Authorization: "Bearer account-a" }, body: "{" }))).status, 400);

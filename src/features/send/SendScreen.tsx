@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSmartWallets } from "@privy-io/react-auth/smart-wallets";
 import { UserPicker, type SelectedUser } from "@/components/UserPicker";
 import { toUsdcUnits } from "@/lib/chain";
 import { useCurrentUser } from "@/features/groups/useCurrentUser";
 import { useUsdcBalance } from "@/features/auth/useUsdcBalance";
+import { useSmartWalletAddress } from "@/features/auth/useSmartWalletAddress";
 import { clearPaymentRecovery, friendlySendError, usePaymentRecovery, useSendUSDC, type SendProgress } from "./sendUSDC";
 import { NOTE_MAX, parseAmount } from "@/features/requests/validation";
 
@@ -20,9 +20,9 @@ const progressText: Record<SendProgress, string> = {
 
 export function SendScreen() {
   const { ready: privyReady, authenticated, login } = usePrivy();
-  const { client } = useSmartWallets();
   const { ready: profileReady, user, error: profileError } = useCurrentUser();
-  const address = client?.account?.address;
+  // Only the current account's linked smart wallet (never a stale SDK client after an account switch).
+  const address = useSmartWalletAddress();
   const { balance, error: balanceError, refresh } = useUsdcBalance(address);
   const { sendUSDC, retryRecord, findOpenPayment, cancelPayment } = useSendUSDC();
   const [recipient, setRecipient] = useState<SelectedUser | null>(null);

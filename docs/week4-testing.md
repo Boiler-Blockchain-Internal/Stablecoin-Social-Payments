@@ -1,6 +1,6 @@
 # Auth & Profiles: club testing and November 12 demo
 
-Use this alongside the existing [profile](profile-page.md), [UserPicker](user-picker.md), and Week 3 [onboarding](week3-onboarding.md), [balance](week3-balance.md), and [faucet](week3-faucet.md) instructions. Do not use the old local `/preview` page: it was a temporary branch-only directory and is removed from the Week 4 checkout. Current main has the team's real navigation, `/send`, `/requests`, `/groups` and `/activity` screens.
+Use this alongside the existing [profile](profile-page.md), [UserPicker](user-picker.md), and Week 3 [onboarding](week3-onboarding.md), [balance](week3-balance.md), and [faucet](week3-faucet.md) instructions. Do not use the old local `/preview` page: it was a temporary branch-only directory and is removed from the Week 4 checkout. Current main has the team's real navigation, `/send`, `/requests`, `/groups`, `/activity` and `/deposit` screens (deposits are outside Auth's scope).
 
 ## Organizer setup (manual)
 
@@ -27,7 +27,7 @@ Record Pass / Fail / Blocked / Not tested per item, plus the build/commit, devic
 | U4 | Repeat peer selection in Requests and Groups | The intended username reaches each form; imports/callback behavior stays consistent |
 | W1 | Compare wallet address with the existing Send smart wallet | Same smart wallet; no embedded signer or previous account's address |
 | W2 | Observe zero/funded balance and click Refresh | Base Sepolia USDC loads with accurate fractions; refresh shows changes |
-| F1 | Copy address and open Get Test USDC | Correct address copied; official Circle page opens a new tab |
+| F1 | In Get test USDC, keep Base Sepolia selected, copy the address and open Circle faucet | Correct address copied; official Circle page opens a new tab (Arc/Ethereum Sepolia go through Deposit instead) |
 | F2 | On Circle select USDC and Base Sepolia, paste address and submit manually | Circle's checks/limits are respected; return and refresh after confirmed funding |
 | E1 | Temporarily block a profile/search request in browser tools, then recover | Clear error/retry; buttons recover; no stale save/redirect after logout |
 | M1 | Check relevant screens on your physical phone | Inputs, results, address, balance and navigation fit and remain usable |

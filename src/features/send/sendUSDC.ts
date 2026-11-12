@@ -7,6 +7,7 @@ import { encodeFunctionData, isAddress, type Address, type Hash } from "viem";
 import { chain, CHAIN_ID, erc20Abi, getUsdcBalance, toUsdcUnits, USDC_ADDRESS, publicClient } from "@/lib/chain";
 import { isValidUsername, normalizeUsername } from "@/lib/username";
 import { NOTE_MAX, parseAmount } from "@/features/requests/validation";
+import { linkedSmartWalletAddress } from "@/features/auth/linkedSmartWallet";
 
 const RECOVERY_KEY = "stablepay:payment-recovery";
 const RECOVERY_EVENT = "stablepay:payment-recovery";
@@ -243,6 +244,8 @@ export function useSendUSDC() {
     const cleanNote = note?.trim() ?? "";
     if (cleanNote.length > NOTE_MAX) throw new Error(`Notes must be ${NOTE_MAX} characters or fewer.`);
     if (!client?.account?.address) throw new Error("Your smart wallet is still initializing. Please wait a moment and try again.");
+    // Never sign with an SDK client left over from a previous account on this browser.
+    if (!linkedSmartWalletAddress(user, client.account.address)) throw new Error("Your smart wallet is still switching accounts. Refresh the page and try again.");
     if (client.chain.id !== CHAIN_ID) throw new Error("Your smart wallet is not connected to Base Sepolia.");
     if (!owner) throw new Error("Session expired. Please log in again.");
     const stored = readPaymentRecovery();
@@ -404,7 +407,7 @@ export function useSendUSDC() {
     }
     clearPaymentRecovery(intent.id);
     return { txHash, paymentId: intent.id, status: "confirmed" };
-  }, [client, findOpenPayment, getAccessToken, owner]);
+  }, [client, findOpenPayment, getAccessToken, owner, user]);
 
   return { sendUSDC, retryRecord, findOpenPayment, cancelPayment };
 }

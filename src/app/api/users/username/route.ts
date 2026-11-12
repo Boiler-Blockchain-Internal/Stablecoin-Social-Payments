@@ -16,9 +16,12 @@ export async function POST(request: Request) {
     const db = getSupabaseAdmin();
     // Exact match after validation: underscores must not act as ILIKE wildcards.
     // The lower(username) unique index also rejects legacy names differing by case.
-    const availability = await db.from("users").select("id").eq("username", username).limit(1);
+    const availability = await db.from("users").select("id, privy_id, username, wallet_address, created_at").eq("username", username).limit(1);
     if (availability.error) throw availability.error;
-    if (availability.data?.length) return Response.json({ error: "That username is already taken." }, { status: 409 });
+    const holder = availability.data?.[0];
+    // Already yours: a retry after a save whose response was lost (e.g. timed out) succeeds instead of trapping you.
+    if (holder?.privy_id === privyId) return Response.json({ user: holder });
+    if (holder) return Response.json({ error: "That username is already taken." }, { status: 409 });
 
     // Identity and first-time-only selection are enforced in the write itself.
     const { data, error } = await db.from("users")

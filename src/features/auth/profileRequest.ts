@@ -33,8 +33,10 @@ export async function requestProfile(path: "/api/users/sync" | "/api/users/usern
       ...(username !== undefined ? { body: JSON.stringify({ username }) } : {}),
     });
     if (response.status === 401) throw new ProfileRequestError("Session expired. Please log in again.", false);
-    const body = await response.json();
+    // A non-JSON body (e.g. a proxy's HTML error page) must not hide the status code's meaning.
+    const body = await response.json().catch(() => null);
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (timedOut) throw new ProfileRequestError("That request took too long. Please try again.");
     if (!response.ok) throw new ProfileRequestError(typeof body?.error === "string" ? body.error : fallback, response.status >= 500 || response.status === 429);
     if (!isAppUser(body?.user)) throw new ProfileRequestError("The profile response was incomplete. Please try again.");
     return body.user;

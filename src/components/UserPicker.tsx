@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { normalizeUsername } from "@/lib/username";
 import { searchUsers, type SelectedUser } from "@/features/auth/searchUsers";
@@ -26,6 +26,8 @@ function UserPickerField({ value, onChange, selectedUser, onSelect, placeholder 
   const { ready, authenticated, user } = usePrivy();
   const ownPrivyId = user?.id;
   const id = useId();
+  // Clear unmounts itself, so put keyboard focus back in the field.
+  const inputRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
   const [internalSelection, setInternalSelection] = useState<SelectedUser | null>(null);
   const [open, setOpen] = useState(false);
@@ -74,7 +76,7 @@ function UserPickerField({ value, onChange, selectedUser, onSelect, placeholder 
     }}>
       <label htmlFor={id} className="block text-sm font-medium">{label}</label>
       <div className="flex gap-2">
-        <input id={id} role="combobox" aria-autocomplete="list" aria-expanded={allowed && open && users.length > 0}
+        <input ref={inputRef} id={id} role="combobox" aria-autocomplete="list" aria-expanded={allowed && open && users.length > 0}
           aria-controls={`${id}-results`} aria-describedby={`${id}-status`}
           aria-activedescendant={active >= 0 && users[active] ? `${id}-option-${active}` : undefined}
           autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20}
@@ -94,7 +96,7 @@ function UserPickerField({ value, onChange, selectedUser, onSelect, placeholder 
             if (event.key === "Enter" && open && users[active]) { event.preventDefault(); event.stopPropagation(); select(users[active]); }
           }}
           className="min-h-11 min-w-0 w-full rounded-lg border border-zinc-300 px-3 py-2 focus:outline-2 focus:outline-zinc-900 disabled:opacity-50" />
-        {signedIn && input && <button type="button" disabled={disabled} onClick={() => select(null)}
+        {signedIn && input && <button type="button" disabled={disabled} onClick={() => { select(null); inputRef.current?.focus(); }}
           onKeyDown={(event) => { if (event.key === "Enter") event.stopPropagation(); }}
           className="min-h-11 shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm">Clear</button>}
       </div>

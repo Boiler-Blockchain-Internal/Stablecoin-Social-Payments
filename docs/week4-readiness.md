@@ -31,7 +31,7 @@ The tester checklist and header-only feedback log are in [week4-testing.md](week
 ## Remaining demo gates (manual)
 
 - Real email and Google sign-in on the authorized deployment, including fresh-account creation, uniqueness and logout/relogin.
-- Apply/review any outstanding committed migrations with the database lead. No new migration is introduced in Week 4.
+- Apply/review any outstanding committed migrations with the database lead. No migration is introduced by the Auth Week 4 PRs (main separately added `20261112120000_deposits.sql`, already applied).
 - Two-account funded test transfer, balance refresh and Activity confirmation with the Send/History owners; real request/group test flows as coordinated by their owners.
 - Actual iPhone/Android testing and 5–10 real club-member sessions/survey responses. Current recorded external responses: **zero**.
 - Lead-approved deployment/preview access. The existing workflow skips previews for non-crh78 authors; this restriction was not changed.
