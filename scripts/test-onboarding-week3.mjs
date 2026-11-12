@@ -4,6 +4,8 @@ import { authFixture, withBrowserFixture } from "./browser-fixture.mjs";
 
 await withBrowserFixture("onboarding-week3", `import React from 'react'; import {createRoot} from 'react-dom/client'; import {AuthProfileBoundary} from './src/features/auth/AuthProfileBoundary'; createRoot(document.getElementById('root')).render(<AuthProfileBoundary><p data-testid="protected">Feature content</p></AuthProfileBoundary>);`, {
   "@privy-io/react-auth": authFixture,
+  // Isolate unrelated live notifications while retaining the real shared shell/nav.
+  "@/features/requests/useIncomingRequests": "export const useIncomingRequests=()=>({pending:0,notice:null,dismiss:()=>{}});",
   "./useSmartWalletAddress": "export const useSmartWalletAddress=()=>undefined;",
   "next/navigation": "export const usePathname=()=>location.pathname; const router={replace:path=>{window.redirects=(window.redirects??0)+1;history.replaceState(null,'',path);}}; export const useRouter=()=>router;",
 }, async ({page, origin, directory}) => {

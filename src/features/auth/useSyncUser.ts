@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import type { Address } from "viem";
-
-class SessionExpiredError extends Error {}
+import { ProfileRequestError, requestProfile } from "./profileRequest";
 
 export type AppUser = {
   id: string;
@@ -34,34 +33,18 @@ export function useSyncUser(smartWalletAddress: Address | undefined) {
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
           const token = await getAccessToken();
-          if (!token) throw new SessionExpiredError("Session expired. Please log in again.");
-          const requestController = new AbortController();
-          const cancelRequest = () => requestController.abort();
-          controller.signal.addEventListener("abort", cancelRequest, { once: true });
-          if (controller.signal.aborted) { cancelRequest(); return; }
-          const timeout = setTimeout(cancelRequest, 15000);
-          let res: Response;
-          try { res = await fetch("/api/users/sync", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-            signal: requestController.signal,
-          }); } finally {
-            clearTimeout(timeout);
-            controller.signal.removeEventListener("abort", cancelRequest);
-          }
-          if (res.status === 401) throw new SessionExpiredError("Session expired. Please log in again.");
-          const body = await res.json();
-          if (!res.ok) throw new Error(body.error ?? "Profile sync failed.");
+          if (!token) throw new ProfileRequestError("Session expired. Please log in again.", false);
+          const saved = await requestProfile("/api/users/sync", token, controller.signal);
           if (controller.signal.aborted) return;
           // An in-flight wallet sync must not undo a username just saved by onboarding.
-          setUser((previous) => ({ ...body.user, username: previous?.username ?? body.user.username }));
+          setUser((previous) => ({ ...saved, username: previous?.username ?? saved.username }));
           setError(null);
           setLoading(false);
-          if (!smartWalletAddress || body.user.wallet_address) return;
+          if (!smartWalletAddress || saved.wallet_address) return;
           if (attempt === 4) throw new Error("Wallet is still being linked. Retry profile sync shortly.");
         } catch (e) {
           if (controller.signal.aborted) return;
-          if (attempt === 4 || e instanceof SessionExpiredError) {
+          if (attempt === 4 || (e instanceof ProfileRequestError && !e.retryable)) {
             setError(e instanceof Error ? e.message : "Profile sync failed.");
             setLoading(false);
             return;

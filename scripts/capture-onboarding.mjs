@@ -42,7 +42,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 375, height: 812 } });
   await page.route("**/api/users/username", async route => {
     const { username } = route.request().postDataJSON();
-    await route.fulfill({ status: username === "taken" ? 409 : 200, contentType: "application/json", body: JSON.stringify(username === "taken" ? { error: "That username is already taken." } : { user: { username } }) });
+    await route.fulfill({ status: username === "taken" ? 409 : 200, contentType: "application/json", body: JSON.stringify(username === "taken" ? { error: "That username is already taken." } : { user: { id: "fixture", privy_id: "fixture-token", username, wallet_address: null, created_at: "2026-11-11T00:00:00Z" } }) });
   });
   await page.goto(`http://127.0.0.1:${fixtureServer.address().port}`);
   await page.getByLabel("Username", { exact: true }).fill("rithvik_1");
