@@ -35,10 +35,10 @@ function FaucetControls({ address }: { address: Address | undefined }) {
     <p className="text-sm text-zinc-600">Testnet only. Test USDC is not real money and has no financial value.</p>
     <fieldset>
       <legend className="text-sm font-medium">Which network?</legend>
-      <div className="mt-2 grid grid-cols-3 gap-2">
+      <div className="mt-2 grid grid-cols-1 gap-2 min-[360px]:grid-cols-3">
         {(Object.keys(NETWORKS) as FaucetNetwork[]).map((key) => (
-          <label key={key} className={`cursor-pointer rounded-lg border px-2 py-2 text-center text-xs font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-zinc-400 ${network === key ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-300 text-zinc-700"}`}>
-            <input type="radio" name={`${id}-network`} value={key} checked={network === key} onChange={() => setNetwork(key)} className="sr-only" />
+          <label key={key} className={`cursor-pointer rounded-lg border px-2 py-2 text-center text-xs font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-zinc-900 has-[:focus-visible]:ring-offset-2 ${network === key ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-300 text-zinc-700"}`}>
+            <input type="radio" name={`${id}-network`} value={key} checked={network === key} onChange={() => { setNetwork(key); setStatus("idle"); }} className="sr-only" />
             {NETWORKS[key].label}
             <span className={`block font-normal ${network === key ? "text-zinc-300" : "text-zinc-500"}`}>{NETWORKS[key].hint}</span>
           </label>
