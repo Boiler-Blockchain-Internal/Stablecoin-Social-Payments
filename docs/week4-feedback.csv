@@ -1,0 +1,1 @@
+tester_id,date,build_commit,device,os,browser,test_kind,auth_method,scenario_id,result,severity,expected,actual,repro_steps,evidence,owner,status
