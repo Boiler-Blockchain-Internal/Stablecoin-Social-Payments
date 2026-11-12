@@ -109,6 +109,16 @@ export function DepositScreen() {
     return () => { cancelled = true; };
   }, [owner, api]);
 
+  // An unfinished deposit restored on load carries on by itself (e.g. after a reload mid-deposit).
+  const autoResumed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pending || busy || !client || !destination || autoResumed.current === pending.burnHash) return;
+    autoResumed.current = pending.burnHash;
+    void run();
+    // run() reads the latest state; re-running only matters when a different deposit is restored.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending?.burnHash, client, destination]);
+
   /** The server rejected this burn for good: forget it so the user isn't stuck. */
   function abandon(item: Pending, message: string) {
     clearPending(item.owner);
@@ -187,6 +197,7 @@ export function DepositScreen() {
       }
       const burnHash = await burnFromWallet(injected, source, destination, amount, setProgress);
       let item: Pending = { owner, source, amount, burnHash };
+      autoResumed.current = burnHash; // This run is already finishing it.
       savePending(item);
       setPending(item);
       // Follow the burn to the transaction that actually mines (MetaMask "Speed up" replaces it).
@@ -203,6 +214,7 @@ export function DepositScreen() {
       }
       if (receipt.transactionHash.toLowerCase() !== burnHash.toLowerCase()) {
         item = { ...item, burnHash: receipt.transactionHash };
+        autoResumed.current = item.burnHash;
         savePending(item);
         setPending(item);
       }
